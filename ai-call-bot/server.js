@@ -7,7 +7,7 @@ const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
 const path = require('path');
 const conversationManager = require('./services/conversationManager');
-
+const voiceService = require('./services/voiceService');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -427,10 +427,11 @@ app.post('/make-call', async (req, res) => {
       language: 'en-US'
     });
 
-    gather.say(
-      { voice: 'Polly.Joanna' },
-      message || "Hey there! I'm your AI assistant. What can I help you with?"
+       const audioUrl = await voiceService.generateSpeech(
+      message || "Hey there! I'm your AI assistant. What can I help you with?",
+      '4tRn1lSkEn13EVTuqb0g'
     );
+    gather.play(audioUrl);
 
     twiml.redirect(`${BASE_URL}/handle-response`);
 
@@ -464,10 +465,11 @@ app.post('/handle-response', async (req, res) => {
       language: 'en-US'
     });
 
-    gather.say(
-      { voice: 'Polly.Joanna' },
-      "I'm listening. What would you like to talk about?"
+        const audioUrl = await voiceService.generateSpeech(
+      "I'm listening. What would you like to talk about?",
+      '4tRn1lSkEn13EVTuqb0g'
     );
+    gather.play(audioUrl);
 
     twiml.redirect(`${BASE_URL}/handle-response`);
 
@@ -492,10 +494,11 @@ app.post('/process-speech', async (req, res) => {
     const twiml = new twilio.twiml.VoiceResponse();
 
     if (!SpeechResult) {
-      twiml.say(
-        { voice: 'Polly.Joanna' },
-        "Sorry, I didn't quite catch that. Could you say it again?"
+          const audioUrl = await voiceService.generateSpeech(
+        "Sorry, I didn't quite catch that. Could you say it again?",
+        '4tRn1lSkEn13EVTuqb0g'
       );
+      twiml.play(audioUrl);
       twiml.redirect(`${BASE_URL}/handle-response`);
       res.type('text/xml');
       return res.send(twiml.toString());
@@ -511,10 +514,11 @@ app.post('/process-speech', async (req, res) => {
         summary: summary
       });
 
-      twiml.say(
-        { voice: 'Polly.Joanna' },
-        "It was great talking with you! Take care!"
+           const audioUrl = await voiceService.generateSpeech(
+        "It was great talking with you! Take care!",
+        '4tRn1lSkEn13EVTuqb0g'
       );
+      twiml.play(audioUrl);
       twiml.hangup();
     } else {
       const result = await conversationManager.generateResponse(CallSid, SpeechResult);
@@ -536,10 +540,11 @@ app.post('/process-speech', async (req, res) => {
         }
       });
 
-      twiml.say(
-        { voice: 'Polly.Joanna' },
-        result.response
+           const audioUrl = await voiceService.generateSpeech(
+        result.response,
+        '4tRn1lSkEn13EVTuqb0g'
       );
+      twiml.play(audioUrl);
       twiml.redirect(`${BASE_URL}/handle-response`);
     }
 
@@ -549,10 +554,11 @@ app.post('/process-speech', async (req, res) => {
     logger.error('Error in /process-speech endpoint', { error: error.message });
 
     const twiml = new twilio.twiml.VoiceResponse();
-    twiml.say(
-      { voice: 'Polly.Joanna' },
-      "Hmm, I'm having a bit of trouble there. Can you try again?"
+        const audioUrl = await voiceService.generateSpeech(
+      "Hmm, I'm having a bit of trouble there. Can you try again?",
+      '4tRn1lSkEn13EVTuqb0g'
     );
+    twiml.play(audioUrl);
     twiml.redirect('/voice');
 
     res.type('text/xml');
@@ -678,3 +684,4 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 module.exports = { app, server, wss };
+
