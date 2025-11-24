@@ -4,6 +4,8 @@ const { WebSocketServer } = require('ws');
 const twilio = require('twilio');
 const winston = require('winston');
 const { v4: uuidv4 } = require('uuid');
+const fs = require('fs');
+const path = require('path');
 const conversationManager = require('./services/conversationManager');
 
 const app = express();
@@ -12,6 +14,12 @@ const HOST = process.env.HOST || '0.0.0.0';
 const NODE_ENV = process.env.NODE_ENV || 'development';
 
 const startTime = Date.now();
+
+// Create logs directory if it doesn't exist
+const logsDir = path.join(__dirname, 'logs');
+if (!fs.existsSync(logsDir)) {
+  fs.mkdirSync(logsDir, { recursive: true });
+}
 
 const logger = winston.createLogger({
   level: process.env.LOG_LEVEL || 'info',
@@ -56,6 +64,18 @@ const checkEnvVars = () => {
     twilioConfigured: process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN,
     openaiConfigured: !!process.env.OPENAI_API_KEY
   };
+};
+
+const getBaseUrl = () => {
+  // Check for Railway environment variables first
+  if (process.env.RAILWAY_PUBLIC_DOMAIN) {
+    return `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`;
+  }
+  if (process.env.RAILWAY_STATIC_URL) {
+    return process.env.RAILWAY_STATIC_URL;
+  }
+  // Fallback to localhost for local development
+  return `http://localhost:${PORT}`;
 };
 
 const getUptime = () => {
@@ -384,12 +404,13 @@ app.post('/make-call', async (req, res) => {
     }
 
     const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+    const baseUrl = getBaseUrl();
 
     const twiml = new twilio.twiml.VoiceResponse();
 
     const gather = twiml.gather({
       input: 'speech',
-      action: '/process-speech',
+      action: `${baseUrl}/process-speech`,
       speechTimeout: 'auto',
       language: 'en-US'
     });
@@ -399,7 +420,7 @@ app.post('/make-call', async (req, res) => {
       message || "Hey there! I'm your AI assistant. What can I help you with?"
     );
 
-    twiml.redirect('/handle-response');
+    twiml.redirect(`${baseUrl}/handle-response`);
 
     const call = await client.calls.create({
       twiml: twiml.toString(),
@@ -422,11 +443,12 @@ app.post('/make-call', async (req, res) => {
 
 app.post('/handle-response', async (req, res) => {
   try {
+    const baseUrl = getBaseUrl();
     const twiml = new twilio.twiml.VoiceResponse();
 
     const gather = twiml.gather({
       input: 'speech',
-      action: '/process-speech',
+      action: `${baseUrl}/process-speech`,
       speechTimeout: 'auto',
       language: 'en-US'
     });
@@ -436,7 +458,7 @@ app.post('/handle-response', async (req, res) => {
       "I'm listening. What would you like to talk about?"
     );
 
-    twiml.redirect('/handle-response');
+    twiml.redirect(`${baseUrl}/handle-response`);
 
     res.type('text/xml');
     res.send(twiml.toString());
@@ -449,6 +471,7 @@ app.post('/handle-response', async (req, res) => {
 app.post('/process-speech', async (req, res) => {
   try {
     const { SpeechResult, Confidence, CallSid } = req.body;
+    const baseUrl = getBaseUrl();
 
     logger.info('Speech received', {
       callSid: CallSid,
@@ -463,7 +486,7 @@ app.post('/process-speech', async (req, res) => {
         { voice: 'Polly.Joanna' },
         "Sorry, I didn't quite catch that. Could you say it again?"
       );
-      twiml.redirect('/handle-response');
+      twiml.redirect(`${baseUrl}/handle-response`);
       res.type('text/xml');
       return res.send(twiml.toString());
     }
@@ -507,7 +530,7 @@ app.post('/process-speech', async (req, res) => {
         { voice: 'Polly.Joanna' },
         result.response
       );
-      twiml.redirect('/handle-response');
+      twiml.redirect(`${baseUrl}/handle-response`);
     }
 
     res.type('text/xml');
