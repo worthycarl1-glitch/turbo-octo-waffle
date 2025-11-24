@@ -45,7 +45,8 @@ const logger = winston.createLogger({
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
+// Serve static audio files
+app.use('/audio', express.static(path.join(__dirname, 'public/audio')));
 app.use((req, res, next) => {
   logger.info(`${req.method} ${req.path}`);
   next();
@@ -684,4 +685,5 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 module.exports = { app, server, wss };
+
 
