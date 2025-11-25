@@ -17,6 +17,12 @@ const NODE_ENV = process.env.NODE_ENV || 'development';
 
 const startTime = Date.now();
 
+// Voice cache for /voices endpoint
+let voicesCache = null;
+let voicesCacheTimestamp = null;
+const VOICES_CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+const DEFAULT_VOICE_ID = '4tRn1lSkEn13EVTuqb0g'; // Serafina - default voice
+
 // Create logs directory if it doesn't exist
 const logsDir = path.join(__dirname, 'logs');
 try {
@@ -400,6 +406,10 @@ app.get('/', (req, res) => {
                             <span class="path">/health</span>
                         </li>
                         <li>
+                            <span class="method">GET</span>
+                            <span class="path">/voices</span>
+                        </li>
+                        <li>
                             <span class="method post">POST</span>
                             <span class="path">/make-call</span>
                         </li>
@@ -720,6 +730,136 @@ app.post('/make-call', async (req, res) => {
   } catch (error) {
     logger.error('Error making outgoing call', { error: error.message, stack: error.stack });
     res.status(500).json({ 
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * GET /voices - Fetch available voices from ElevenLabs API
+ * Returns formatted voice data with metadata for dashboard integration
+ */
+app.get('/voices', async (req, res) => {
+  const startFetchTime = Date.now();
+  
+  try {
+    // Check for ElevenLabs API key
+    if (!process.env.ELEVENLABS_API_KEY) {
+      logger.warn('Voices endpoint called without ELEVENLABS_API_KEY configured');
+      return res.status(500).json({
+        success: false,
+        error: 'ElevenLabs API key not configured',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Check cache - return cached data if available and fresh
+    const now = Date.now();
+    if (voicesCache && voicesCacheTimestamp && (now - voicesCacheTimestamp < VOICES_CACHE_DURATION)) {
+      const responseTime = Date.now() - startFetchTime;
+      logger.info('Returning cached voices data', { 
+        count: voicesCache.count, 
+        cacheAge: Math.round((now - voicesCacheTimestamp) / 1000),
+        responseTime 
+      });
+      return res.json(voicesCache);
+    }
+
+    // Fetch from ElevenLabs API
+    logger.info('Fetching voices from ElevenLabs API');
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
+    const response = await fetch('https://api.elevenlabs.io/v1/voices', {
+      method: 'GET',
+      headers: {
+        'xi-api-key': process.env.ELEVENLABS_API_KEY
+      },
+      signal: controller.signal
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const statusCode = response.status;
+      let errorMessage = `ElevenLabs API error: ${statusCode} ${response.statusText}`;
+      
+      // Provide more specific error messages for common status codes
+      if (statusCode === 401) {
+        errorMessage = 'ElevenLabs API authentication failed - invalid API key';
+      } else if (statusCode === 403) {
+        errorMessage = 'ElevenLabs API access forbidden - check API key permissions';
+      } else if (statusCode === 429) {
+        errorMessage = 'ElevenLabs API rate limit exceeded - please try again later';
+      }
+      
+      logger.error('ElevenLabs API error', { statusCode, statusText: response.statusText });
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+
+    // Validate response format
+    if (!data || !Array.isArray(data.voices)) {
+      logger.error('Invalid response format from ElevenLabs API', { 
+        hasData: !!data, 
+        hasVoicesArray: data ? Array.isArray(data.voices) : false 
+      });
+      throw new Error('Invalid response format from ElevenLabs API');
+    }
+
+    // Format response to match our schema
+    const formattedVoices = data.voices.map(voice => ({
+      voiceId: voice.voice_id,
+      name: voice.name,
+      category: voice.category || 'premade',
+      description: voice.description || '',
+      labels: voice.labels || {},
+      previewUrl: voice.preview_url || null
+    }));
+
+    const result = {
+      success: true,
+      voices: formattedVoices,
+      default: process.env.DEFAULT_VOICE_ID || DEFAULT_VOICE_ID,
+      count: formattedVoices.length,
+      timestamp: new Date().toISOString()
+    };
+
+    // Cache the result
+    voicesCache = result;
+    voicesCacheTimestamp = now;
+
+    const responseTime = Date.now() - startFetchTime;
+    logger.info(`Successfully fetched ${formattedVoices.length} voices from ElevenLabs`, { 
+      count: formattedVoices.length,
+      responseTime 
+    });
+    
+    res.json(result);
+
+  } catch (error) {
+    const responseTime = Date.now() - startFetchTime;
+    
+    // Handle specific error types
+    if (error.name === 'AbortError') {
+      logger.error('ElevenLabs API request timed out', { responseTime });
+      return res.status(504).json({
+        success: false,
+        error: 'ElevenLabs API request timed out',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    logger.error('Error fetching voices from ElevenLabs', { 
+      error: error.message, 
+      responseTime 
+    });
+    
+    res.status(500).json({
       success: false,
       error: error.message,
       timestamp: new Date().toISOString()
@@ -1232,6 +1372,51 @@ app.get('/api-docs', (req, res) => {
           uptime: 'integer',
           memory: 'object',
           configuration: 'object'
+        }
+      },
+      'GET /voices': {
+        description: 'Fetch available voices from ElevenLabs API dynamically',
+        response: {
+          success: 'boolean',
+          voices: [{
+            voiceId: 'string - ElevenLabs voice ID',
+            name: 'string - Voice name',
+            category: 'string - Voice category (premade, cloned, etc.)',
+            description: 'string - Voice description',
+            labels: 'object - Voice labels (accent, age, gender, use_case)',
+            previewUrl: 'string - URL to preview audio (nullable)'
+          }],
+          default: 'string - Default voice ID',
+          count: 'integer - Number of available voices',
+          timestamp: 'string - ISO 8601 timestamp'
+        },
+        caching: 'Responses are cached for 5 minutes to reduce API calls',
+        errors: {
+          500: 'ElevenLabs API key not configured or API error',
+          504: 'ElevenLabs API request timed out'
+        },
+        example: {
+          response: {
+            success: true,
+            voices: [
+              {
+                voiceId: '4tRn1lSkEn13EVTuqb0g',
+                name: 'Serafina',
+                category: 'premade',
+                description: 'Confident and clear',
+                labels: {
+                  accent: 'american',
+                  age: 'young',
+                  gender: 'female',
+                  use_case: 'narration'
+                },
+                previewUrl: 'https://...'
+              }
+            ],
+            default: '4tRn1lSkEn13EVTuqb0g',
+            count: 1,
+            timestamp: '2025-11-25T10:00:00.000Z'
+          }
         }
       }
     },
