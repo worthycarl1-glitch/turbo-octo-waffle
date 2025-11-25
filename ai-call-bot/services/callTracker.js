@@ -6,6 +6,8 @@
 class CallTracker {
   constructor() {
     this.activeCalls = new Map();
+    // Configurable cleanup threshold (default: 30 minutes)
+    this.cleanupMaxAgeMs = parseInt(process.env.CALL_TRACKER_MAX_AGE_MS, 10) || 30 * 60 * 1000;
   }
 
   /**
@@ -250,14 +252,13 @@ class CallTracker {
   }
 
   /**
-   * Cleanup old calls (30+ minutes)
+   * Cleanup old calls based on configurable threshold
    */
   cleanupOldCalls() {
-    const maxAge = 30 * 60 * 1000; // 30 minutes
     const now = Date.now();
 
     for (const [callSid, call] of this.activeCalls.entries()) {
-      if (now - call.startTime.getTime() > maxAge) {
+      if (now - call.startTime.getTime() > this.cleanupMaxAgeMs) {
         this.activeCalls.delete(callSid);
       }
     }

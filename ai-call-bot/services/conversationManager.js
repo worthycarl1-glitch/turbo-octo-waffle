@@ -126,7 +126,10 @@ Remember: This is outbound sales. Not everyone will be interested. Know when to 
    * @param {string} callSid 
    */
   isMaxDurationExceeded(callSid) {
-    const conversation = this.getConversation(callSid);
+    if (!this.conversations.has(callSid)) {
+      return false;
+    }
+    const conversation = this.conversations.get(callSid);
     const elapsedSeconds = (Date.now() - conversation.startTime) / 1000;
     return elapsedSeconds >= conversation.maxDuration;
   }
@@ -136,7 +139,10 @@ Remember: This is outbound sales. Not everyone will be interested. Know when to 
    * @param {string} callSid 
    */
   getMetadata(callSid) {
-    const conversation = this.getConversation(callSid);
+    if (!this.conversations.has(callSid)) {
+      return {};
+    }
+    const conversation = this.conversations.get(callSid);
     return conversation.metadata;
   }
 

@@ -665,7 +665,11 @@ app.post('/make-call', async (req, res) => {
     }
 
     // Add status callback for call tracking
-    callOptions.statusCallback = `${BASE_URL}/call-status-callback?conversationId=${encodeURIComponent(conversationId)}&callbackUrl=${encodeURIComponent(callbackUrl || '')}`;
+    let statusCallbackUrl = `${BASE_URL}/call-status-callback?conversationId=${encodeURIComponent(conversationId)}`;
+    if (callbackUrl) {
+      statusCallbackUrl += `&callbackUrl=${encodeURIComponent(callbackUrl)}`;
+    }
+    callOptions.statusCallback = statusCallbackUrl;
     callOptions.statusCallbackEvent = ['initiated', 'ringing', 'answered', 'completed'];
 
     // Make the call
@@ -1060,7 +1064,7 @@ app.get('/api-docs', (req, res) => {
               type: 'float',
               default: 1.0,
               range: '0.5-2.0',
-              description: 'Speech speed multiplier'
+              description: 'Speech speed multiplier (Note: Limited support - ElevenLabs API does not natively support this parameter, logged for future implementation)'
             }
           },
           conversationControl: {

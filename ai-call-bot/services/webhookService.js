@@ -114,12 +114,16 @@ class WebhookService {
 
   /**
    * Generate simple signature for webhook verification
+   * NOTE: This is a basic signature for development/testing.
+   * For production, use HMAC-SHA256 with a secret key.
    * @param {object} payload 
    */
   generateSignature(payload) {
     // Simple signature using timestamp and callSid
     const data = `${payload.callSid}:${payload.timestamp}`;
-    // In production, this would use HMAC with a secret key
+    // TODO: In production, replace with HMAC-SHA256:
+    // const crypto = require('crypto');
+    // return crypto.createHmac('sha256', process.env.WEBHOOK_SECRET).update(data).digest('hex');
     return Buffer.from(data).toString('base64');
   }
 
