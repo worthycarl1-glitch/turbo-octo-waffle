@@ -1111,7 +1111,7 @@ app.post('/handle-response', async (req, res) => {
 
     // Smart timeout handling based on silence count
     if (silenceCount >= 2) {
-      // After 10 seconds of silence (2 x 5s timeout), gracefully end the call
+      // After ~6 seconds of silence (2 x 3s timeout), gracefully end the call
       logger.info('Smart timeout: Ending call after extended silence', { 
         callSid: CallSid, 
         conversationId,
@@ -1138,7 +1138,7 @@ app.post('/handle-response', async (req, res) => {
     }
 
     if (silenceCount === 1) {
-      // After 3-5 seconds of silence, play gentle prompt
+      // After ~3 seconds of silence, play gentle prompt
       logger.info('Smart timeout: Playing gentle prompt after silence', { 
         callSid: CallSid, 
         conversationId,
