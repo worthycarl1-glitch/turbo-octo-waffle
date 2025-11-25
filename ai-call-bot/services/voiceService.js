@@ -45,6 +45,11 @@ class VoiceService {
     
     // Ensure audio directory exists
     this.ensureAudioDir();
+    
+    // Set up periodic cache cleanup (every hour)
+    this.cacheCleanupInterval = setInterval(() => {
+      this.cleanupCache();
+    }, 60 * 60 * 1000); // 1 hour
   }
 
   /**
@@ -63,11 +68,8 @@ class VoiceService {
    */
   isCommonPhrase(text) {
     const normalizedText = text.toLowerCase().trim();
-    return this.commonPhrases.some(phrase => 
-      normalizedText === phrase || 
-      normalizedText.startsWith(phrase + ' ') ||
-      normalizedText.endsWith(' ' + phrase)
-    );
+    // Use exact match or check if the normalized text is exactly one of the common phrases
+    return this.commonPhrases.some(phrase => normalizedText === phrase);
   }
 
   /**

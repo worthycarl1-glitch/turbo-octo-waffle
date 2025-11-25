@@ -541,6 +541,10 @@ const validateHints = (value) => {
     if (typeof hint !== 'string') {
       return { valid: false, error: 'All hints must be strings' };
     }
+    // Validate that hints don't contain commas (used as delimiter by Twilio)
+    if (hint.includes(',')) {
+      return { valid: false, error: 'Hints cannot contain commas' };
+    }
   }
   return { valid: true };
 };
