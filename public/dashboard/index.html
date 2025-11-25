@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard</title>
+    <link rel="stylesheet" href="styles.css"> <!-- Assuming there's a CSS file to style the dashboard -->
+</head>
+<body>
+    <div class="container">
+        <h1>Professional Dashboard</h1>
+        <form id="dashboard-form">
+            <label for="phone-number">Phone Number:</label>
+            <input type="tel" id="phone-number" name="phone-number" required>
+
+            <label for="script-selector">Select Script:</label>
+            <select id="script-selector" name="script-selector">
+                <option value="script1">Script 1</option>
+                <option value="script2">Script 2</option>
+                <option value="script3">Script 3</option>
+            </select>
+
+            <label for="voice-selector">Select Voice:</label>
+            <select id="voice-selector" name="voice-selector">
+                <option value="voice1">Voice 1</option>
+                <option value="voice2">Voice 2</option>
+                <option value="voice3">Voice 3</option>
+            </select>
+
+            <button type="submit">Dial</button>
+        </form>
+    </div>
+</body>
+</html>
