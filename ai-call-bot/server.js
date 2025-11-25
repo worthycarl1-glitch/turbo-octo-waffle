@@ -21,6 +21,7 @@ const startTime = Date.now();
 let voicesCache = null;
 let voicesCacheTimestamp = null;
 const VOICES_CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+const DEFAULT_VOICE_ID = '4tRn1lSkEn13EVTuqb0g'; // Serafina - default voice
 
 // Create logs directory if it doesn't exist
 const logsDir = path.join(__dirname, 'logs');
@@ -803,7 +804,10 @@ app.get('/voices', async (req, res) => {
 
     // Validate response format
     if (!data || !Array.isArray(data.voices)) {
-      logger.error('Invalid response format from ElevenLabs API', { data });
+      logger.error('Invalid response format from ElevenLabs API', { 
+        hasData: !!data, 
+        hasVoicesArray: data ? Array.isArray(data.voices) : false 
+      });
       throw new Error('Invalid response format from ElevenLabs API');
     }
 
@@ -820,7 +824,7 @@ app.get('/voices', async (req, res) => {
     const result = {
       success: true,
       voices: formattedVoices,
-      default: process.env.DEFAULT_VOICE_ID || '4tRn1lSkEn13EVTuqb0g',
+      default: process.env.DEFAULT_VOICE_ID || DEFAULT_VOICE_ID,
       count: formattedVoices.length,
       timestamp: new Date().toISOString()
     };
