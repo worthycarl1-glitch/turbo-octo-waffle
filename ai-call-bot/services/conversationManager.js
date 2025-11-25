@@ -53,6 +53,47 @@ Remember: This is outbound sales. Not everyone will be interested. Know when to 
       .trim();
   }
 
+  /**
+   * Initialize conversation with enhanced configuration
+   * @param {string} callSid - Twilio call SID
+   * @param {object} config - Enhanced conversation configuration
+   */
+  initConversation(callSid, config = {}) {
+    const conversation = {
+      history: [],
+      startTime: Date.now(),
+      turnCount: 0,
+      emotions: [],
+      totalTokens: 0,
+      rejectionCount: 0,
+      shouldExit: false,
+      // Enhanced configuration
+      customSystemPrompt: config.systemPrompt || null,
+      conversationMode: config.conversationMode || 'interactive',
+      maxDuration: config.maxDuration || 600,
+      metadata: config.metadata || {},
+      language: config.language || 'en-US',
+      enableEmotionDetection: config.enableEmotionDetection !== false,
+      enableInterruptions: config.enableInterruptions !== false,
+      sentimentAnalysis: config.sentimentAnalysis !== false,
+      qualificationQuestions: config.qualificationQuestions || [],
+      transferNumber: config.transferNumber || null,
+      transferConditions: config.transferConditions || []
+    };
+    
+    this.conversations.set(callSid, conversation);
+    
+    console.log('Conversation initialized:', {
+      callSid,
+      conversationMode: conversation.conversationMode,
+      maxDuration: conversation.maxDuration,
+      hasCustomPrompt: !!conversation.customSystemPrompt,
+      metadata: conversation.metadata
+    });
+    
+    return conversation;
+  }
+
   getConversation(callSid) {
     if (!this.conversations.has(callSid)) {
       this.conversations.set(callSid, {
@@ -62,10 +103,58 @@ Remember: This is outbound sales. Not everyone will be interested. Know when to 
         emotions: [],
         totalTokens: 0,
         rejectionCount: 0,
-        shouldExit: false
+        shouldExit: false,
+        // Default enhanced configuration
+        customSystemPrompt: null,
+        conversationMode: 'interactive',
+        maxDuration: 600,
+        metadata: {},
+        language: 'en-US',
+        enableEmotionDetection: true,
+        enableInterruptions: true,
+        sentimentAnalysis: true,
+        qualificationQuestions: [],
+        transferNumber: null,
+        transferConditions: []
       });
     }
     return this.conversations.get(callSid);
+  }
+
+  /**
+   * Check if call has exceeded max duration
+   * @param {string} callSid 
+   */
+  isMaxDurationExceeded(callSid) {
+    if (!this.conversations.has(callSid)) {
+      return false;
+    }
+    const conversation = this.conversations.get(callSid);
+    const elapsedSeconds = (Date.now() - conversation.startTime) / 1000;
+    return elapsedSeconds >= conversation.maxDuration;
+  }
+
+  /**
+   * Get conversation metadata
+   * @param {string} callSid 
+   */
+  getMetadata(callSid) {
+    if (!this.conversations.has(callSid)) {
+      return {};
+    }
+    const conversation = this.conversations.get(callSid);
+    return conversation.metadata;
+  }
+
+  /**
+   * Update conversation metadata
+   * @param {string} callSid 
+   * @param {object} metadata 
+   */
+  updateMetadata(callSid, metadata) {
+    const conversation = this.getConversation(callSid);
+    conversation.metadata = { ...conversation.metadata, ...metadata };
+    return conversation.metadata;
   }
 
   addToHistory(callSid, role, content) {
@@ -191,16 +280,29 @@ Remember: This is outbound sales. Not everyone will be interested. Know when to 
     const emotionModifier = emotionDetector.getEmotionModifier(emotionData);
     const emotionalTrend = emotionDetector.getEmotionalTrend(callSid);
 
-    let systemPrompt = this.baseSystemPrompt + '\n\n';
-    systemPrompt += `CURRENT CALLER EMOTIONAL STATE:\n${emotionModifier.modifier}\n`;
+    // Use custom system prompt if provided, otherwise use base
+    let systemPrompt = conversation.customSystemPrompt || this.baseSystemPrompt;
+    systemPrompt += '\n\n';
+    
+    // Add emotion context if emotion detection is enabled
+    if (conversation.enableEmotionDetection) {
+      systemPrompt += `CURRENT CALLER EMOTIONAL STATE:\n${emotionModifier.modifier}\n`;
 
-    if (emotionalTrend !== 'stable') {
-      systemPrompt += `\nEMOTIONAL TREND: The caller's mood is ${emotionalTrend}. `;
-      if (emotionalTrend === 'improving') {
-        systemPrompt += 'They seem more receptive. This is a good sign!';
-      } else {
-        systemPrompt += 'They seem less interested. Consider wrapping up politely.';
+      if (emotionalTrend !== 'stable') {
+        systemPrompt += `\nEMOTIONAL TREND: The caller's mood is ${emotionalTrend}. `;
+        if (emotionalTrend === 'improving') {
+          systemPrompt += 'They seem more receptive. This is a good sign!';
+        } else {
+          systemPrompt += 'They seem less interested. Consider wrapping up politely.';
+        }
       }
+    }
+    
+    // Add conversation mode instructions
+    if (conversation.conversationMode === 'scripted') {
+      systemPrompt += '\n\nCONVERSATION MODE: Scripted - Follow the provided script closely.';
+    } else if (conversation.conversationMode === 'faq') {
+      systemPrompt += '\n\nCONVERSATION MODE: FAQ - Focus on answering questions directly and concisely.';
     }
 
     const messages = [
@@ -323,7 +425,12 @@ Remember: This is outbound sales. Not everyone will be interested. Know when to 
       rejections: conversation.rejectionCount,
       topicsDiscussed: this.getRecentContext(callSid, 5),
       totalTokensUsed: conversation.totalTokens,
-      outcome: conversation.shouldExit ? 'not_interested' : 'completed'
+      outcome: conversation.shouldExit ? 'not_interested' : 'completed',
+      // Enhanced summary data
+      conversationMode: conversation.conversationMode,
+      metadata: conversation.metadata,
+      emotions: conversation.emotions,
+      transcript: conversation.history.map(h => ({ role: h.role, content: h.content }))
     };
   }
 
