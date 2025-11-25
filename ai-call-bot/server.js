@@ -564,6 +564,10 @@ app.post('/make-call', async (req, res) => {
       voiceSimilarityBoost,
       voiceStyle,
       speakingRate,
+      // TTS Provider Configuration (Optional) - NEW
+      ttsProvider = process.env.DEFAULT_TTS_PROVIDER || 'elevenlabs',
+      openaiVoice = 'alloy',
+      openaiModel = 'tts-1',
       // Conversation Control (Optional)
       message,
       systemPrompt,
@@ -691,6 +695,36 @@ app.post('/make-call', async (req, res) => {
       });
     }
 
+    // Validate TTS provider
+    const validTtsProviders = ['elevenlabs', 'openai'];
+    if (!validTtsProviders.includes(ttsProvider)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid ttsProvider',
+        details: `ttsProvider must be one of: ${validTtsProviders.join(', ')}`
+      });
+    }
+
+    // Validate OpenAI voice if using OpenAI TTS
+    const validOpenaiVoices = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'];
+    if (ttsProvider === 'openai' && !validOpenaiVoices.includes(openaiVoice)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid openaiVoice',
+        details: `openaiVoice must be one of: ${validOpenaiVoices.join(', ')}`
+      });
+    }
+
+    // Validate OpenAI TTS model if using OpenAI TTS
+    const validOpenaiTtsModels = ['tts-1', 'tts-1-hd'];
+    if (ttsProvider === 'openai' && !validOpenaiTtsModels.includes(openaiModel)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid openaiModel',
+        details: `openaiModel must be one of: ${validOpenaiTtsModels.join(', ')}`
+      });
+    }
+
     // Validate conversationMode
     const validModes = ['interactive', 'scripted', 'faq'];
     if (!validModes.includes(conversationMode)) {
@@ -719,12 +753,20 @@ app.post('/make-call', async (req, res) => {
       });
     }
 
-    // Check ElevenLabs configuration
-    if (!voiceService.isConfigured()) {
+    // Check TTS provider configuration
+    if (ttsProvider === 'elevenlabs' && !voiceService.isConfigured()) {
       return res.status(500).json({
         success: false,
         error: 'ElevenLabs not configured',
         details: 'Server is missing ELEVENLABS_API_KEY environment variable'
+      });
+    }
+
+    if (ttsProvider === 'openai' && !voiceService.isOpenAIConfigured()) {
+      return res.status(500).json({
+        success: false,
+        error: 'OpenAI TTS not configured',
+        details: 'Server is missing OPENAI_API_KEY environment variable'
       });
     }
 
@@ -737,19 +779,25 @@ app.post('/make-call', async (req, res) => {
       stability: voiceStability,
       similarityBoost: voiceSimilarityBoost,
       style: voiceStyle,
-      speakingRate
+      speakingRate,
+      // OpenAI TTS settings
+      openaiVoice,
+      openaiModel
     };
 
     // Log enhanced parameters
     logger.info('Enhanced call request received', {
       to,
       conversationId,
+      ttsProvider,
       voiceConfig: {
         voiceId,
         voiceStability,
         voiceSimilarityBoost,
         voiceStyle,
-        speakingRate
+        speakingRate,
+        openaiVoice: ttsProvider === 'openai' ? openaiVoice : undefined,
+        openaiModel: ttsProvider === 'openai' ? openaiModel : undefined
       },
       conversationMode,
       maxDuration,
@@ -822,12 +870,13 @@ app.post('/make-call', async (req, res) => {
 
     const gather = twiml.gather(gatherOptions);
 
-    // Generate speech with enhanced voice settings (with caching support)
+    // Generate speech with enhanced voice settings (with caching support and TTS provider)
     const audioUrl = await voiceService.generateSpeech(
       message || "Hey there! I'm your AI assistant. What can I help you with?",
       voiceId,
       voiceConfig,
-      enableResponseCache
+      enableResponseCache,
+      ttsProvider
     );
     gather.play(audioUrl);
 
@@ -857,7 +906,7 @@ app.post('/make-call', async (req, res) => {
     // Make the call
     const call = await client.calls.create(callOptions);
 
-    // Initialize call tracking
+    // Initialize call tracking with TTS provider
     callTracker.initCall(call.sid, {
       conversationId,
       to,
@@ -865,6 +914,9 @@ app.post('/make-call', async (req, res) => {
         voiceId,
         ...voiceService.getVoiceInfo(voiceId)
       },
+      ttsProvider,
+      openaiVoice: ttsProvider === 'openai' ? openaiVoice : undefined,
+      openaiModel: ttsProvider === 'openai' ? openaiModel : undefined,
       metadata,
       systemPrompt,
       conversationMode,
@@ -910,104 +962,112 @@ app.post('/make-call', async (req, res) => {
 });
 
 /**
- * GET /voices - Fetch available voices from ElevenLabs API
+ * GET /voices - Fetch available voices from ElevenLabs API and OpenAI
  * Returns formatted voice data with metadata for dashboard integration
+ * Now supports both ElevenLabs and OpenAI TTS providers
  */
 app.get('/voices', async (req, res) => {
   const startFetchTime = Date.now();
   
   try {
-    // Check for ElevenLabs API key
-    if (!process.env.ELEVENLABS_API_KEY) {
-      logger.warn('Voices endpoint called without ELEVENLABS_API_KEY configured');
-      return res.status(500).json({
-        success: false,
-        error: 'ElevenLabs API key not configured',
-        timestamp: new Date().toISOString()
-      });
-    }
-
-    // Check cache - return cached data if available and fresh
     const now = Date.now();
+    
+    // Check cache - return cached data if available and fresh
     if (voicesCache && voicesCacheTimestamp && (now - voicesCacheTimestamp < VOICES_CACHE_DURATION)) {
       const responseTime = Date.now() - startFetchTime;
       logger.info('Returning cached voices data', { 
-        count: voicesCache.count, 
         cacheAge: Math.round((now - voicesCacheTimestamp) / 1000),
         responseTime 
       });
       return res.json(voicesCache);
     }
 
-    // Fetch from ElevenLabs API
-    logger.info('Fetching voices from ElevenLabs API');
-    
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
-
-    const response = await fetch('https://api.elevenlabs.io/v1/voices', {
-      method: 'GET',
-      headers: {
-        'xi-api-key': process.env.ELEVENLABS_API_KEY
-      },
-      signal: controller.signal
-    });
-
-    clearTimeout(timeoutId);
-
-    if (!response.ok) {
-      const statusCode = response.status;
-      let errorMessage = `ElevenLabs API error: ${statusCode} ${response.statusText}`;
-      
-      // Provide more specific error messages for common status codes
-      if (statusCode === 401) {
-        errorMessage = 'ElevenLabs API authentication failed - invalid API key';
-      } else if (statusCode === 403) {
-        errorMessage = 'ElevenLabs API access forbidden - check API key permissions';
-      } else if (statusCode === 429) {
-        errorMessage = 'ElevenLabs API rate limit exceeded - please try again later';
-      }
-      
-      logger.error('ElevenLabs API error', { statusCode, statusText: response.statusText });
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-
-    // Validate response format
-    if (!data || !Array.isArray(data.voices)) {
-      logger.error('Invalid response format from ElevenLabs API', { 
-        hasData: !!data, 
-        hasVoicesArray: data ? Array.isArray(data.voices) : false 
-      });
-      throw new Error('Invalid response format from ElevenLabs API');
-    }
-
-    // Format response to match our schema
-    const formattedVoices = data.voices.map(voice => ({
-      voiceId: voice.voice_id,
-      name: voice.name,
-      category: voice.category || 'premade',
-      description: voice.description || '',
-      labels: voice.labels || {},
-      previewUrl: voice.preview_url || null
-    }));
-
+    // Initialize result structure with both providers
     const result = {
       success: true,
-      voices: formattedVoices,
-      default: process.env.DEFAULT_VOICE_ID || DEFAULT_VOICE_ID,
-      count: formattedVoices.length,
+      providers: {
+        elevenlabs: {
+          voices: [],
+          default: process.env.DEFAULT_VOICE_ID || DEFAULT_VOICE_ID,
+          configured: !!process.env.ELEVENLABS_API_KEY
+        },
+        openai: {
+          voices: voiceService.getOpenAIVoices(),
+          default: 'alloy',
+          configured: !!process.env.OPENAI_API_KEY
+        }
+      },
+      defaultProvider: process.env.DEFAULT_TTS_PROVIDER || 'elevenlabs',
       timestamp: new Date().toISOString()
     };
+
+    // Fetch from ElevenLabs API if configured
+    if (process.env.ELEVENLABS_API_KEY) {
+      logger.info('Fetching voices from ElevenLabs API');
+      
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
+        const response = await fetch('https://api.elevenlabs.io/v1/voices', {
+          method: 'GET',
+          headers: {
+            'xi-api-key': process.env.ELEVENLABS_API_KEY
+          },
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          const statusCode = response.status;
+          let errorMessage = `ElevenLabs API error: ${statusCode} ${response.statusText}`;
+          
+          if (statusCode === 401) {
+            errorMessage = 'ElevenLabs API authentication failed - invalid API key';
+          } else if (statusCode === 403) {
+            errorMessage = 'ElevenLabs API access forbidden - check API key permissions';
+          } else if (statusCode === 429) {
+            errorMessage = 'ElevenLabs API rate limit exceeded - please try again later';
+          }
+          
+          logger.error('ElevenLabs API error', { statusCode, statusText: response.statusText });
+          result.providers.elevenlabs.error = errorMessage;
+        } else {
+          const data = await response.json();
+
+          if (data && Array.isArray(data.voices)) {
+            result.providers.elevenlabs.voices = data.voices.map(voice => ({
+              voiceId: voice.voice_id,
+              name: voice.name,
+              category: voice.category || 'premade',
+              description: voice.description || '',
+              labels: voice.labels || {},
+              previewUrl: voice.preview_url || null
+            }));
+          }
+        }
+      } catch (elevenLabsError) {
+        if (elevenLabsError.name === 'AbortError') {
+          result.providers.elevenlabs.error = 'ElevenLabs API request timed out';
+        } else {
+          result.providers.elevenlabs.error = elevenLabsError.message;
+        }
+        logger.error('Error fetching ElevenLabs voices', { error: elevenLabsError.message });
+      }
+    } else {
+      logger.warn('Voices endpoint called without ELEVENLABS_API_KEY configured');
+      result.providers.elevenlabs.error = 'ElevenLabs API key not configured';
+    }
 
     // Cache the result
     voicesCache = result;
     voicesCacheTimestamp = now;
 
     const responseTime = Date.now() - startFetchTime;
-    logger.info(`Successfully fetched ${formattedVoices.length} voices from ElevenLabs`, { 
-      count: formattedVoices.length,
+    logger.info('Successfully fetched voices from providers', { 
+      elevenlabsCount: result.providers.elevenlabs.voices.length,
+      openaiCount: result.providers.openai.voices.length,
       responseTime 
     });
     
@@ -1016,17 +1076,7 @@ app.get('/voices', async (req, res) => {
   } catch (error) {
     const responseTime = Date.now() - startFetchTime;
     
-    // Handle specific error types
-    if (error.name === 'AbortError') {
-      logger.error('ElevenLabs API request timed out', { responseTime });
-      return res.status(504).json({
-        success: false,
-        error: 'ElevenLabs API request timed out',
-        timestamp: new Date().toISOString()
-      });
-    }
-    
-    logger.error('Error fetching voices from ElevenLabs', { 
+    logger.error('Error fetching voices', { 
       error: error.message, 
       responseTime 
     });
@@ -1040,11 +1090,13 @@ app.get('/voices', async (req, res) => {
 });
 
 /**
- * Handle response endpoint (enhanced with conversationId)
+ * Handle response endpoint (enhanced with conversationId and smart timeout)
+ * - Removed repetitive "I'm listening" message for natural conversation flow
+ * - Implements smart timeout: 3s gentle prompt, 10s graceful end
  */
 app.post('/handle-response', async (req, res) => {
   try {
-    const { conversationId } = req.query;
+    const { conversationId, silenceCount: silenceCountParam } = req.query;
     const { CallSid } = req.body;
     const twiml = new twilio.twiml.VoiceResponse();
 
@@ -1052,22 +1104,88 @@ app.post('/handle-response', async (req, res) => {
     const callData = CallSid ? callTracker.getCall(CallSid) : null;
     const voiceConfig = callData?.voiceConfig || {};
     const voiceId = voiceConfig.voiceId || '4tRn1lSkEn13EVTuqb0g';
+    const ttsProvider = callData?.ttsProvider || 'elevenlabs';
 
+    // Track silence count for smart timeout handling
+    const silenceCount = parseInt(silenceCountParam, 10) || 0;
+
+    // Smart timeout handling based on silence count
+    if (silenceCount >= 2) {
+      // After 10 seconds of silence (2 x 5s timeout), gracefully end the call
+      logger.info('Smart timeout: Ending call after extended silence', { 
+        callSid: CallSid, 
+        conversationId,
+        silenceCount 
+      });
+      
+      // Track timeout event
+      if (callData) {
+        callTracker.updateSilenceEvent(CallSid, 'graceful_end', silenceCount);
+      }
+
+      const audioUrl = await voiceService.generateSpeech(
+        "I'll let you go for now. Feel free to call back anytime!",
+        voiceId,
+        voiceConfig,
+        true,
+        ttsProvider
+      );
+      twiml.play(audioUrl);
+      twiml.hangup();
+      
+      res.type('text/xml');
+      return res.send(twiml.toString());
+    }
+
+    if (silenceCount === 1) {
+      // After 3-5 seconds of silence, play gentle prompt
+      logger.info('Smart timeout: Playing gentle prompt after silence', { 
+        callSid: CallSid, 
+        conversationId,
+        silenceCount 
+      });
+      
+      // Track timeout event
+      if (callData) {
+        callTracker.updateSilenceEvent(CallSid, 'gentle_prompt', silenceCount);
+      }
+
+      const audioUrl = await voiceService.generateSpeech(
+        "Hey, are you there?",
+        voiceId,
+        voiceConfig,
+        true,
+        ttsProvider
+      );
+      
+      const gather = twiml.gather({
+        input: 'speech',
+        action: `${BASE_URL}/process-speech${conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : ''}`,
+        speechTimeout: 5,
+        language: callData?.language || 'en-US'
+      });
+      gather.play(audioUrl);
+
+      // Redirect with incremented silence count
+      twiml.redirect(`${BASE_URL}/handle-response?silenceCount=${silenceCount + 1}${conversationId ? `&conversationId=${encodeURIComponent(conversationId)}` : ''}`);
+      
+      res.type('text/xml');
+      return res.send(twiml.toString());
+    }
+
+    // Normal conversation flow - wait silently like a human would
+    // No more "I'm listening" message - just gather speech input
     const gather = twiml.gather({
       input: 'speech',
       action: `${BASE_URL}/process-speech${conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : ''}`,
-      speechTimeout: 'auto',
+      speechTimeout: 3,
       language: callData?.language || 'en-US'
     });
 
-    const audioUrl = await voiceService.generateSpeech(
-      "I'm listening. What would you like to talk about?",
-      voiceId,
-      voiceConfig
-    );
-    gather.play(audioUrl);
+    // Silent wait - the bot waits quietly for user input
 
-    twiml.redirect(`${BASE_URL}/handle-response${conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : ''}`);
+    // Redirect with silence count for timeout handling
+    twiml.redirect(`${BASE_URL}/handle-response?silenceCount=1${conversationId ? `&conversationId=${encodeURIComponent(conversationId)}` : ''}`);
 
     res.type('text/xml');
     res.send(twiml.toString());
@@ -1085,10 +1203,11 @@ app.post('/process-speech', async (req, res) => {
     const { conversationId } = req.query;
     const { SpeechResult, Confidence, CallSid } = req.body;
 
-    // Get call data for voice config
+    // Get call data for voice config and TTS provider
     const callData = callTracker.getCall(CallSid);
     const voiceConfig = callData?.voiceConfig || {};
     const voiceId = voiceConfig.voiceId || '4tRn1lSkEn13EVTuqb0g';
+    const ttsProvider = callData?.ttsProvider || 'elevenlabs';
 
     logger.info('Speech received', {
       callSid: CallSid,
@@ -1097,10 +1216,11 @@ app.post('/process-speech', async (req, res) => {
       confidence: Confidence
     });
 
-    // Update call tracker
+    // Update call tracker - reset silence tracking since user spoke
     if (callData) {
       callTracker.updateStatus(CallSid, 'in-progress');
       callTracker.updateDuration(CallSid);
+      callTracker.resetSilenceCount(CallSid);
     }
 
     const twiml = new twilio.twiml.VoiceResponse();
@@ -1109,7 +1229,9 @@ app.post('/process-speech', async (req, res) => {
       const audioUrl = await voiceService.generateSpeech(
         "Sorry, I didn't quite catch that. Could you say it again?",
         voiceId,
-        voiceConfig
+        voiceConfig,
+        true,
+        ttsProvider
       );
       twiml.play(audioUrl);
       twiml.redirect(`${BASE_URL}/handle-response${conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : ''}`);
@@ -1144,7 +1266,9 @@ app.post('/process-speech', async (req, res) => {
       const audioUrl = await voiceService.generateSpeech(
         "It was great talking with you! Take care!",
         voiceId,
-        voiceConfig
+        voiceConfig,
+        true,
+        ttsProvider
       );
       twiml.play(audioUrl);
       twiml.hangup();
@@ -1187,7 +1311,9 @@ app.post('/process-speech', async (req, res) => {
         const audioUrl = await voiceService.generateSpeech(
           result.response,
           voiceId,
-          voiceConfig
+          voiceConfig,
+          true,
+          ttsProvider
         );
         twiml.play(audioUrl);
         twiml.hangup();
@@ -1195,7 +1321,9 @@ app.post('/process-speech', async (req, res) => {
         const audioUrl = await voiceService.generateSpeech(
           result.response,
           voiceId,
-          voiceConfig
+          voiceConfig,
+          true,
+          ttsProvider
         );
         twiml.play(audioUrl);
         twiml.redirect(`${BASE_URL}/handle-response${conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : ''}`);
@@ -1377,6 +1505,26 @@ app.get('/api-docs', (req, res) => {
               default: 1.0,
               range: '0.5-2.0',
               description: 'Speech speed multiplier (Note: Limited support - ElevenLabs API does not natively support this parameter, logged for future implementation)'
+            }
+          },
+          ttsProviderConfiguration: {
+            ttsProvider: {
+              type: 'string',
+              default: 'elevenlabs',
+              options: ['elevenlabs', 'openai'],
+              description: 'TTS provider selection. ElevenLabs = premium ($0.20/min), OpenAI = cost-effective ($0.015/min)'
+            },
+            openaiVoice: {
+              type: 'string',
+              default: 'alloy',
+              options: ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'],
+              description: 'OpenAI TTS voice (only used when ttsProvider is "openai")'
+            },
+            openaiModel: {
+              type: 'string',
+              default: 'tts-1',
+              options: ['tts-1', 'tts-1-hd'],
+              description: 'OpenAI TTS model. tts-1 = faster, tts-1-hd = higher quality'
             }
           },
           conversationControl: {

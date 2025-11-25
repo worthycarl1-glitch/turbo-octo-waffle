@@ -1,4 +1,5 @@
 const { ElevenLabsClient } = require('elevenlabs');
+const OpenAI = require('openai');
 const { Readable } = require('stream');
 const fs = require('fs').promises;
 const path = require('path');
@@ -6,9 +7,20 @@ const path = require('path');
 // Response cache for common phrases (24 hour TTL)
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
+// OpenAI TTS voice options with descriptions
+const OPENAI_VOICES = {
+  alloy: { name: 'Alloy', description: 'Neutral, balanced' },
+  echo: { name: 'Echo', description: 'Male, clear' },
+  fable: { name: 'Fable', description: 'Male, expressive' },
+  onyx: { name: 'Onyx', description: 'Male, deep' },
+  nova: { name: 'Nova', description: 'Female, energetic' },
+  shimmer: { name: 'Shimmer', description: 'Female, warm' }
+};
+
 class VoiceService {
   constructor() {
-    this.client = null;
+    this.elevenlabsClient = null;
+    this.openaiClient = null;
     this.defaultVoiceId = 'EXAVITQu4vr4xnSDxMaL'; // Sarah - natural, professional female voice
     this.audioDir = path.join(__dirname, '../public/audio');
     
@@ -26,7 +38,9 @@ class VoiceService {
       'okay',
       'sure',
       'one moment',
-      'please hold'
+      'please hold',
+      'hey, are you there?',
+      "i'll let you go for now. feel free to call back anytime!"
     ];
     
     // Default voice settings
@@ -37,9 +51,17 @@ class VoiceService {
       speakingRate: 1.0
     };
     
+    // Initialize ElevenLabs client
     if (process.env.ELEVENLABS_API_KEY) {
-      this.client = new ElevenLabsClient({
+      this.elevenlabsClient = new ElevenLabsClient({
         apiKey: process.env.ELEVENLABS_API_KEY
+      });
+    }
+    
+    // Initialize OpenAI client for TTS
+    if (process.env.OPENAI_API_KEY) {
+      this.openaiClient = new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY
       });
     }
     
@@ -53,13 +75,28 @@ class VoiceService {
   }
 
   /**
+   * Check if ElevenLabs is configured
+   */
+  isConfigured() {
+    return !!this.elevenlabsClient;
+  }
+
+  /**
+   * Check if OpenAI TTS is configured
+   */
+  isOpenAIConfigured() {
+    return !!this.openaiClient;
+  }
+
+  /**
    * Generate cache key for a phrase
    * @param {string} text - Text to cache
    * @param {string} voiceId - Voice ID
+   * @param {string} provider - TTS provider ('elevenlabs' or 'openai')
    */
-  getCacheKey(text, voiceId) {
+  getCacheKey(text, voiceId, provider = 'elevenlabs') {
     const normalizedText = text.toLowerCase().trim();
-    return `${voiceId}:${normalizedText}`;
+    return `${provider}:${voiceId}:${normalizedText}`;
   }
 
   /**
@@ -126,54 +163,44 @@ class VoiceService {
   }
 
   /**
-   * Generate speech with enhanced voice settings
+   * Generate speech with enhanced voice settings - supports both ElevenLabs and OpenAI
    * @param {string} text - Text to convert to speech
-   * @param {string} voiceId - ElevenLabs voice ID
+   * @param {string} voiceId - ElevenLabs voice ID or OpenAI voice name
    * @param {object} options - Enhanced voice options
-   * @param {number} options.stability - Voice stability (0.0-1.0)
-   * @param {number} options.similarityBoost - Voice similarity boost (0.0-1.0)
-   * @param {number} options.style - Voice style (0.0-1.0)
+   * @param {number} options.stability - Voice stability (0.0-1.0) - ElevenLabs only
+   * @param {number} options.similarityBoost - Voice similarity boost (0.0-1.0) - ElevenLabs only
+   * @param {number} options.style - Voice style (0.0-1.0) - ElevenLabs only
    * @param {number} options.speakingRate - Speaking rate multiplier (0.5-2.0)
+   * @param {string} options.openaiVoice - OpenAI voice name (alloy, echo, fable, onyx, nova, shimmer)
+   * @param {string} options.openaiModel - OpenAI TTS model (tts-1 or tts-1-hd)
    * @param {boolean} enableCache - Whether to use response caching (default: true)
+   * @param {string} ttsProvider - TTS provider: 'elevenlabs' or 'openai' (default: 'elevenlabs')
    */
-  async generateSpeech(text, voiceId, options = {}, enableCache = true) {
-    if (!this.client) {
-      throw new Error('ElevenLabs not configured. Add ELEVENLABS_API_KEY to environment variables.');
-    }
-
+  async generateSpeech(text, voiceId, options = {}, enableCache = true, ttsProvider = 'elevenlabs') {
     try {
-      const effectiveVoiceId = voiceId || this.defaultVoiceId;
+      // Determine effective voice ID based on provider
+      const effectiveVoiceId = ttsProvider === 'openai' 
+        ? (options.openaiVoice || 'alloy')
+        : (voiceId || this.defaultVoiceId);
       
       // Check cache for common phrases if caching is enabled
       if (enableCache && this.isCommonPhrase(text)) {
-        const cacheKey = this.getCacheKey(text, effectiveVoiceId);
+        const cacheKey = this.getCacheKey(text, effectiveVoiceId, ttsProvider);
         const cachedUrl = this.getCachedResponse(cacheKey);
         if (cachedUrl) {
           return cachedUrl;
         }
       }
 
-      // Merge with defaults
-      const voiceOptions = {
-        voiceId: effectiveVoiceId,
-        stability: this.validateRange(options.stability, 0, 1, this.defaultSettings.stability),
-        similarityBoost: this.validateRange(options.similarityBoost, 0, 1, this.defaultSettings.similarityBoost),
-        style: this.validateRange(options.style, 0, 1, this.defaultSettings.style),
-        speakingRate: this.validateRange(options.speakingRate, 0.5, 2.0, this.defaultSettings.speakingRate)
-      };
-
-      // Log voice configuration for debugging
-      console.log('Voice configuration:', {
-        voiceId: voiceOptions.voiceId,
-        stability: voiceOptions.stability,
-        similarityBoost: voiceOptions.similarityBoost,
-        style: voiceOptions.style,
-        speakingRate: voiceOptions.speakingRate,
-        cacheEnabled: enableCache
-      });
-
-      // Generate audio buffer
-      const audioBuffer = await this.textToSpeech(text, voiceOptions);
+      let audioBuffer;
+      
+      if (ttsProvider === 'openai') {
+        // Use OpenAI TTS
+        audioBuffer = await this.generateSpeechOpenAI(text, options);
+      } else {
+        // Use ElevenLabs TTS (default)
+        audioBuffer = await this.generateSpeechElevenLabs(text, voiceId, options);
+      }
       
       // Create unique filename
       const filename = `audio-${Date.now()}-${Math.random().toString(36).substr(2, 9)}.mp3`;
@@ -191,13 +218,89 @@ class VoiceService {
       
       // Cache the response if it's a common phrase and caching is enabled
       if (enableCache && this.isCommonPhrase(text)) {
-        const cacheKey = this.getCacheKey(text, effectiveVoiceId);
+        const cacheKey = this.getCacheKey(text, effectiveVoiceId, ttsProvider);
         this.setCachedResponse(cacheKey, audioUrl);
       }
       
       return audioUrl;
     } catch (error) {
       console.error('Error in generateSpeech:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Generate speech using ElevenLabs TTS
+   * @param {string} text - Text to convert to speech
+   * @param {string} voiceId - ElevenLabs voice ID
+   * @param {object} options - Voice options
+   */
+  async generateSpeechElevenLabs(text, voiceId, options = {}) {
+    if (!this.elevenlabsClient) {
+      throw new Error('ElevenLabs not configured. Add ELEVENLABS_API_KEY to environment variables.');
+    }
+
+    const effectiveVoiceId = voiceId || this.defaultVoiceId;
+    
+    // Merge with defaults
+    const voiceOptions = {
+      voiceId: effectiveVoiceId,
+      stability: this.validateRange(options.stability, 0, 1, this.defaultSettings.stability),
+      similarityBoost: this.validateRange(options.similarityBoost, 0, 1, this.defaultSettings.similarityBoost),
+      style: this.validateRange(options.style, 0, 1, this.defaultSettings.style),
+      speakingRate: this.validateRange(options.speakingRate, 0.5, 2.0, this.defaultSettings.speakingRate)
+    };
+
+    // Log voice configuration for debugging
+    console.log('ElevenLabs voice configuration:', {
+      voiceId: voiceOptions.voiceId,
+      stability: voiceOptions.stability,
+      similarityBoost: voiceOptions.similarityBoost,
+      style: voiceOptions.style,
+      speakingRate: voiceOptions.speakingRate
+    });
+
+    return await this.textToSpeech(text, voiceOptions);
+  }
+
+  /**
+   * Generate speech using OpenAI TTS
+   * @param {string} text - Text to convert to speech
+   * @param {object} options - Voice options
+   * @param {string} options.openaiVoice - Voice name (alloy, echo, fable, onyx, nova, shimmer)
+   * @param {string} options.openaiModel - TTS model (tts-1 or tts-1-hd)
+   * @param {number} options.speakingRate - Speaking rate (0.25 to 4.0)
+   */
+  async generateSpeechOpenAI(text, options = {}) {
+    if (!this.openaiClient) {
+      throw new Error('OpenAI not configured. Add OPENAI_API_KEY to environment variables.');
+    }
+
+    const voice = options.openaiVoice || 'alloy';
+    const model = options.openaiModel || 'tts-1';
+    const speed = this.validateRange(options.speakingRate, 0.25, 4.0, 1.0);
+
+    // Log voice configuration for debugging
+    console.log('OpenAI TTS configuration:', {
+      voice,
+      model,
+      speed,
+      textLength: text.length
+    });
+
+    try {
+      const response = await this.openaiClient.audio.speech.create({
+        model: model,
+        voice: voice,
+        input: text,
+        speed: speed,
+        response_format: 'mp3'
+      });
+
+      const buffer = Buffer.from(await response.arrayBuffer());
+      return buffer;
+    } catch (error) {
+      console.error('OpenAI TTS error:', error);
       throw error;
     }
   }
@@ -221,7 +324,7 @@ class VoiceService {
   }
 
   async textToSpeech(text, options = {}) {
-    if (!this.client) {
+    if (!this.elevenlabsClient) {
       throw new Error('ElevenLabs not configured. Add ELEVENLABS_API_KEY to environment variables.');
     }
 
@@ -251,7 +354,7 @@ class VoiceService {
         console.log('Speaking rate requested:', options.speakingRate, '(Note: May require audio post-processing)');
       }
 
-      const audio = await this.client.generate(generateOptions);
+      const audio = await this.elevenlabsClient.generate(generateOptions);
 
       // Convert async iterable to buffer
       const chunks = [];
@@ -267,7 +370,7 @@ class VoiceService {
   }
 
   async textToSpeechStream(text, options = {}) {
-    if (!this.client) {
+    if (!this.elevenlabsClient) {
       throw new Error('ElevenLabs not configured. Add ELEVENLABS_API_KEY to environment variables.');
     }
 
@@ -282,7 +385,7 @@ class VoiceService {
         use_speaker_boost: true
       };
       
-      const audioStream = await this.client.generate({
+      const audioStream = await this.elevenlabsClient.generate({
         voice: voiceId,
         text: text,
         model_id: 'eleven_monolingual_v1',
@@ -318,11 +421,7 @@ class VoiceService {
     return { voiceId, voiceName: 'Custom' };
   }
 
-  isConfigured() {
-    return !!this.client;
-  }
-
-  // Available voice IDs (you can customize these)
+  // Available ElevenLabs voice IDs
   getVoices() {
     return {
       serafina: '4tRn1lSkEn13EVTuqb0g', // Your chosen voice!
@@ -335,6 +434,37 @@ class VoiceService {
       josh: 'TxGEqnHWrfWFTfGW9XjX', // Deep, authoritative male
       arnold: 'VR6AewLTigWG4xSOukaG', // Friendly, professional male
       sam: 'yoZ06aMxZJJ28mfd3POQ'  // Dynamic, energetic male
+    };
+  }
+
+  /**
+   * Get OpenAI TTS voices
+   */
+  getOpenAIVoices() {
+    return Object.entries(OPENAI_VOICES).map(([voiceId, info]) => ({
+      voiceId,
+      name: info.name,
+      description: info.description
+    }));
+  }
+
+  /**
+   * Get all voices from both providers
+   */
+  getAllVoices() {
+    return {
+      elevenlabs: {
+        voices: Object.entries(this.getVoices()).map(([name, voiceId]) => ({
+          voiceId,
+          name: name.charAt(0).toUpperCase() + name.slice(1),
+          provider: 'elevenlabs'
+        })),
+        default: '4tRn1lSkEn13EVTuqb0g'
+      },
+      openai: {
+        voices: this.getOpenAIVoices().map(v => ({ ...v, provider: 'openai' })),
+        default: 'alloy'
+      }
     };
   }
 
