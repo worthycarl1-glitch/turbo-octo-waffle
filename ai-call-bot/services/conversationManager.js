@@ -78,7 +78,11 @@ Remember: This is outbound sales. Not everyone will be interested. Know when to 
       sentimentAnalysis: config.sentimentAnalysis !== false,
       qualificationQuestions: config.qualificationQuestions || [],
       transferNumber: config.transferNumber || null,
-      transferConditions: config.transferConditions || []
+      transferConditions: config.transferConditions || [],
+      // Performance optimization parameters
+      model: config.model || 'gpt-4o-mini',
+      maxTokens: config.maxTokens || 150,
+      temperature: config.temperature !== undefined ? config.temperature : 0.7
     };
     
     this.conversations.set(callSid, conversation);
@@ -88,7 +92,11 @@ Remember: This is outbound sales. Not everyone will be interested. Know when to 
       conversationMode: conversation.conversationMode,
       maxDuration: conversation.maxDuration,
       hasCustomPrompt: !!conversation.customSystemPrompt,
-      metadata: conversation.metadata
+      metadata: conversation.metadata,
+      // Log optimization params
+      model: conversation.model,
+      maxTokens: conversation.maxTokens,
+      temperature: conversation.temperature
     });
     
     return conversation;
@@ -115,7 +123,11 @@ Remember: This is outbound sales. Not everyone will be interested. Know when to 
         sentimentAnalysis: true,
         qualificationQuestions: [],
         transferNumber: null,
-        transferConditions: []
+        transferConditions: [],
+        // Performance optimization parameters
+        model: 'gpt-4o-mini',
+        maxTokens: 150,
+        temperature: 0.7
       });
     }
     return this.conversations.get(callSid);
@@ -316,18 +328,19 @@ Remember: This is outbound sales. Not everyone will be interested. Know when to 
     }))); 
 
     try {
-      let temperature = 0.7;
+      // Use conversation's temperature with emotion-based adjustments
+      let adjustedTemperature = conversation.temperature;
       if (emotionData.emotion === 'positive') {
-        temperature = 0.8;
+        adjustedTemperature = Math.min(2.0, adjustedTemperature + 0.1);
       } else if (emotionData.emotion === 'frustrated' || emotionData.emotion === 'very_negative') {
-        temperature = 0.5;
+        adjustedTemperature = Math.max(0.0, adjustedTemperature - 0.2);
       }
 
       const completion = await this.openai.chat.completions.create({
-        model: 'gpt-3.5-turbo',
+        model: conversation.model,
         messages: messages,
-        max_tokens: 80,
-        temperature: temperature,
+        max_tokens: conversation.maxTokens,
+        temperature: adjustedTemperature,
         presence_penalty: 0.6,
         frequency_penalty: 0.3
       });
