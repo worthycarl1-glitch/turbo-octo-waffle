@@ -9,6 +9,14 @@ class VoiceService {
     this.defaultVoiceId = 'EXAVITQu4vr4xnSDxMaL'; // Sarah - natural, professional female voice
     this.audioDir = path.join(__dirname, '../public/audio');
     
+    // Default voice settings
+    this.defaultSettings = {
+      stability: 0.5,
+      similarityBoost: 0.75,
+      style: 0.0,
+      speakingRate: 1.0
+    };
+    
     if (process.env.ELEVENLABS_API_KEY) {
       this.client = new ElevenLabsClient({
         apiKey: process.env.ELEVENLABS_API_KEY
@@ -27,14 +35,42 @@ class VoiceService {
     }
   }
 
+  /**
+   * Generate speech with enhanced voice settings
+   * @param {string} text - Text to convert to speech
+   * @param {string} voiceId - ElevenLabs voice ID
+   * @param {object} options - Enhanced voice options
+   * @param {number} options.stability - Voice stability (0.0-1.0)
+   * @param {number} options.similarityBoost - Voice similarity boost (0.0-1.0)
+   * @param {number} options.style - Voice style (0.0-1.0)
+   * @param {number} options.speakingRate - Speaking rate multiplier (0.5-2.0)
+   */
   async generateSpeech(text, voiceId, options = {}) {
     if (!this.client) {
       throw new Error('ElevenLabs not configured. Add ELEVENLABS_API_KEY to environment variables.');
     }
 
     try {
+      // Merge with defaults
+      const voiceOptions = {
+        voiceId: voiceId || this.defaultVoiceId,
+        stability: this.validateRange(options.stability, 0, 1, this.defaultSettings.stability),
+        similarityBoost: this.validateRange(options.similarityBoost, 0, 1, this.defaultSettings.similarityBoost),
+        style: this.validateRange(options.style, 0, 1, this.defaultSettings.style),
+        speakingRate: this.validateRange(options.speakingRate, 0.5, 2.0, this.defaultSettings.speakingRate)
+      };
+
+      // Log voice configuration for debugging
+      console.log('Voice configuration:', {
+        voiceId: voiceOptions.voiceId,
+        stability: voiceOptions.stability,
+        similarityBoost: voiceOptions.similarityBoost,
+        style: voiceOptions.style,
+        speakingRate: voiceOptions.speakingRate
+      });
+
       // Generate audio buffer
-      const audioBuffer = await this.textToSpeech(text, { ...options, voiceId });
+      const audioBuffer = await this.textToSpeech(text, voiceOptions);
       
       // Create unique filename
       const filename = `audio-${Date.now()}-${Math.random().toString(36).substr(2, 9)}.mp3`;
@@ -55,6 +91,24 @@ class VoiceService {
     }
   }
 
+  /**
+   * Validate numeric value is within range
+   * @param {number} value - Value to validate
+   * @param {number} min - Minimum allowed value
+   * @param {number} max - Maximum allowed value
+   * @param {number} defaultValue - Default if invalid
+   */
+  validateRange(value, min, max, defaultValue) {
+    if (value === undefined || value === null) {
+      return defaultValue;
+    }
+    const num = parseFloat(value);
+    if (isNaN(num)) {
+      return defaultValue;
+    }
+    return Math.max(min, Math.min(max, num));
+  }
+
   async textToSpeech(text, options = {}) {
     if (!this.client) {
       throw new Error('ElevenLabs not configured. Add ELEVENLABS_API_KEY to environment variables.');
@@ -63,17 +117,30 @@ class VoiceService {
     try {
       const voiceId = options.voiceId || this.defaultVoiceId;
       
-      const audio = await this.client.generate({
+      // Build voice settings with enhanced parameters
+      const voiceSettings = {
+        stability: options.stability !== undefined ? options.stability : this.defaultSettings.stability,
+        similarity_boost: options.similarityBoost !== undefined ? options.similarityBoost : this.defaultSettings.similarityBoost,
+        style: options.style !== undefined ? options.style : this.defaultSettings.style,
+        use_speaker_boost: true
+      };
+
+      // Build generation options
+      const generateOptions = {
         voice: voiceId,
         text: text,
         model_id: 'eleven_monolingual_v1',
-        voice_settings: {
-          stability: options.stability || 0.5,
-          similarity_boost: options.similarityBoost || 0.75,
-          style: options.style || 0.0,
-          use_speaker_boost: true
-        }
-      });
+        voice_settings: voiceSettings
+      };
+
+      // Note: ElevenLabs API doesn't directly support speaking rate in the generate method
+      // Speaking rate would need to be handled through the model or post-processing
+      // For now, we log it and apply if the API supports it in the future
+      if (options.speakingRate && options.speakingRate !== 1.0) {
+        console.log('Speaking rate requested:', options.speakingRate, '(Note: May require audio post-processing)');
+      }
+
+      const audio = await this.client.generate(generateOptions);
 
       // Convert async iterable to buffer
       const chunks = [];
@@ -96,16 +163,19 @@ class VoiceService {
     try {
       const voiceId = options.voiceId || this.defaultVoiceId;
       
+      // Build voice settings with enhanced parameters
+      const voiceSettings = {
+        stability: options.stability !== undefined ? options.stability : this.defaultSettings.stability,
+        similarity_boost: options.similarityBoost !== undefined ? options.similarityBoost : this.defaultSettings.similarityBoost,
+        style: options.style !== undefined ? options.style : this.defaultSettings.style,
+        use_speaker_boost: true
+      };
+      
       const audioStream = await this.client.generate({
         voice: voiceId,
         text: text,
         model_id: 'eleven_monolingual_v1',
-        voice_settings: {
-          stability: options.stability || 0.5,
-          similarity_boost: options.similarityBoost || 0.75,
-          style: options.style || 0.0,
-          use_speaker_boost: true
-        },
+        voice_settings: voiceSettings,
         stream: true
       });
 
@@ -114,6 +184,27 @@ class VoiceService {
       console.error('ElevenLabs TTS stream error:', error);
       throw error;
     }
+  }
+
+  /**
+   * Get default voice settings
+   */
+  getDefaultSettings() {
+    return { ...this.defaultSettings };
+  }
+
+  /**
+   * Get voice info by ID
+   * @param {string} voiceId 
+   */
+  getVoiceInfo(voiceId) {
+    const voices = this.getVoices();
+    for (const [name, id] of Object.entries(voices)) {
+      if (id === voiceId) {
+        return { voiceId: id, voiceName: name };
+      }
+    }
+    return { voiceId, voiceName: 'Custom' };
   }
 
   isConfigured() {

@@ -8,6 +8,8 @@ const fs = require('fs');
 const path = require('path');
 const conversationManager = require('./services/conversationManager');
 const voiceService = require('./services/voiceService');
+const callTracker = require('./services/callTracker');
+const webhookService = require('./services/webhookService');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -430,74 +432,326 @@ app.get('/health', (req, res) => {
   });
 });
 
+/**
+ * Validate E.164 phone number format
+ * @param {string} phone 
+ */
+const validatePhoneNumber = (phone) => {
+  const e164Regex = /^\+[1-9]\d{1,14}$/;
+  return e164Regex.test(phone);
+};
+
+/**
+ * Validate numeric range
+ * @param {number} value 
+ * @param {number} min 
+ * @param {number} max 
+ * @param {string} fieldName 
+ */
+const validateNumericRange = (value, min, max, fieldName) => {
+  if (value === undefined || value === null) {
+    return { valid: true };
+  }
+  const num = parseFloat(value);
+  if (isNaN(num)) {
+    return { valid: false, error: `${fieldName} must be a number` };
+  }
+  if (num < min || num > max) {
+    return { valid: false, error: `${fieldName} must be between ${min} and ${max}` };
+  }
+  return { valid: true };
+};
+
+/**
+ * Enhanced /make-call endpoint with enterprise-grade parameters
+ */
 app.post('/make-call', async (req, res) => {
   try {
-    const { to, message } = req.body;
+    // Extract all parameters from request body
+    const {
+      // Required
+      to,
+      // Voice Configuration (Optional)
+      voiceId = '4tRn1lSkEn13EVTuqb0g',
+      voiceStability,
+      voiceSimilarityBoost,
+      voiceStyle,
+      speakingRate,
+      // Conversation Control (Optional)
+      message,
+      systemPrompt,
+      conversationMode = 'interactive',
+      maxDuration = 600,
+      language = 'en-US',
+      // Advanced Features (Optional)
+      enableEmotionDetection = true,
+      enableInterruptions = true,
+      sentimentAnalysis = true,
+      recordCall = false,
+      callbackUrl = null,
+      metadata = {},
+      // Lead Qualification (Optional)
+      qualificationQuestions = [],
+      transferNumber = null,
+      transferConditions = [],
+      // Scheduling & Integration (Optional)
+      calendarIntegration = false,
+      crmSync = false,
+      timezone = 'America/Los_Angeles'
+    } = req.body;
 
+    // === VALIDATION ===
+    
+    // Required: Phone number
     if (!to) {
-      return res.status(400).json({ error: 'Phone number required' });
+      return res.status(400).json({ 
+        success: false,
+        error: 'Phone number required',
+        details: 'The "to" parameter is required and must be a valid E.164 phone number'
+      });
     }
 
+    // Validate E.164 format
+    if (!validatePhoneNumber(to)) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Invalid phone number format',
+        details: 'Phone number must be in E.164 format (e.g., +14155551234)'
+      });
+    }
+
+    // Validate numeric ranges
+    const rangeValidations = [
+      validateNumericRange(voiceStability, 0, 1, 'voiceStability'),
+      validateNumericRange(voiceSimilarityBoost, 0, 1, 'voiceSimilarityBoost'),
+      validateNumericRange(voiceStyle, 0, 1, 'voiceStyle'),
+      validateNumericRange(speakingRate, 0.5, 2.0, 'speakingRate'),
+      validateNumericRange(maxDuration, 1, 3600, 'maxDuration')
+    ];
+
+    for (const validation of rangeValidations) {
+      if (!validation.valid) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid parameter value',
+          details: validation.error
+        });
+      }
+    }
+
+    // Validate conversationMode
+    const validModes = ['interactive', 'scripted', 'faq'];
+    if (!validModes.includes(conversationMode)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid conversationMode',
+        details: `conversationMode must be one of: ${validModes.join(', ')}`
+      });
+    }
+
+    // Validate callbackUrl if provided
+    if (callbackUrl && !webhookService.isValidUrl(callbackUrl)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid callbackUrl',
+        details: 'callbackUrl must be a valid HTTP/HTTPS URL'
+      });
+    }
+
+    // Check Twilio configuration
     if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) {
-      return res.status(500).json({ error: 'Twilio not configured' });
+      return res.status(500).json({ 
+        success: false,
+        error: 'Twilio not configured',
+        details: 'Server is missing Twilio credentials'
+      });
     }
 
+    // Check ElevenLabs configuration
+    if (!voiceService.isConfigured()) {
+      return res.status(500).json({
+        success: false,
+        error: 'ElevenLabs not configured',
+        details: 'Server is missing ELEVENLABS_API_KEY environment variable'
+      });
+    }
+
+    // Generate conversation ID
+    const conversationId = `conv_${uuidv4()}`;
+
+    // Build voice configuration object
+    const voiceConfig = {
+      voiceId,
+      stability: voiceStability,
+      similarityBoost: voiceSimilarityBoost,
+      style: voiceStyle,
+      speakingRate
+    };
+
+    // Log enhanced parameters
+    logger.info('Enhanced call request received', {
+      to,
+      conversationId,
+      voiceConfig: {
+        voiceId,
+        voiceStability,
+        voiceSimilarityBoost,
+        voiceStyle,
+        speakingRate
+      },
+      conversationMode,
+      maxDuration,
+      language,
+      enableEmotionDetection,
+      enableInterruptions,
+      sentimentAnalysis,
+      recordCall,
+      hasCallbackUrl: !!callbackUrl,
+      hasSystemPrompt: !!systemPrompt,
+      metadata,
+      qualificationQuestionsCount: qualificationQuestions.length,
+      hasTransferNumber: !!transferNumber
+    });
+
+    // Initialize conversation with enhanced configuration
+    conversationManager.initConversation(conversationId, {
+      systemPrompt,
+      conversationMode,
+      maxDuration,
+      metadata,
+      language,
+      enableEmotionDetection,
+      enableInterruptions,
+      sentimentAnalysis,
+      qualificationQuestions,
+      transferNumber,
+      transferConditions
+    });
+
+    // Create Twilio client
     const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 
+    // Build TwiML response
     const twiml = new twilio.twiml.VoiceResponse();
 
     const gather = twiml.gather({
       input: 'speech',
-      action: `${BASE_URL}/process-speech`,
+      action: `${BASE_URL}/process-speech?conversationId=${encodeURIComponent(conversationId)}`,
       speechTimeout: 'auto',
-      language: 'en-US'
+      language: language
     });
 
-       const audioUrl = await voiceService.generateSpeech(
+    // Generate speech with enhanced voice settings
+    const audioUrl = await voiceService.generateSpeech(
       message || "Hey there! I'm your AI assistant. What can I help you with?",
-      '4tRn1lSkEn13EVTuqb0g'
+      voiceId,
+      voiceConfig
     );
     gather.play(audioUrl);
 
-    twiml.redirect(`${BASE_URL}/handle-response`);
+    twiml.redirect(`${BASE_URL}/handle-response?conversationId=${encodeURIComponent(conversationId)}`);
 
-    const call = await client.calls.create({
+    // Create call options
+    const callOptions = {
       twiml: twiml.toString(),
       to: to,
       from: process.env.TWILIO_PHONE_NUMBER
+    };
+
+    // Add recording if requested
+    if (recordCall) {
+      callOptions.record = true;
+      callOptions.recordingStatusCallback = `${BASE_URL}/recording-callback?conversationId=${encodeURIComponent(conversationId)}`;
+    }
+
+    // Add status callback for call tracking
+    callOptions.statusCallback = `${BASE_URL}/call-status-callback?conversationId=${encodeURIComponent(conversationId)}&callbackUrl=${encodeURIComponent(callbackUrl || '')}`;
+    callOptions.statusCallbackEvent = ['initiated', 'ringing', 'answered', 'completed'];
+
+    // Make the call
+    const call = await client.calls.create(callOptions);
+
+    // Initialize call tracking
+    callTracker.initCall(call.sid, {
+      conversationId,
+      to,
+      voiceConfig: {
+        voiceId,
+        ...voiceService.getVoiceInfo(voiceId)
+      },
+      metadata,
+      systemPrompt,
+      conversationMode,
+      maxDuration,
+      callbackUrl,
+      recordCall,
+      enableEmotionDetection,
+      sentimentAnalysis,
+      qualificationQuestions,
+      transferNumber,
+      transferConditions
     });
 
-    logger.info('Outgoing call initiated', { callSid: call.sid, to: to });
+    logger.info('Outgoing call initiated', { 
+      callSid: call.sid, 
+      conversationId,
+      to 
+    });
 
-    res.json({
+    // Build enhanced response
+    const response = {
       success: true,
       callSid: call.sid,
-      to: to
-    });
+      to: to,
+      conversationId: conversationId,
+      estimatedDuration: maxDuration,
+      voiceConfig: {
+        voiceId,
+        ...voiceService.getVoiceInfo(voiceId)
+      },
+      timestamp: new Date().toISOString()
+    };
+
+    res.json(response);
   } catch (error) {
-    logger.error('Error making outgoing call', { error: error.message });
-    res.status(500).json({ error: error.message });
+    logger.error('Error making outgoing call', { error: error.message, stack: error.stack });
+    res.status(500).json({ 
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
   }
 });
 
+/**
+ * Handle response endpoint (enhanced with conversationId)
+ */
 app.post('/handle-response', async (req, res) => {
   try {
+    const { conversationId } = req.query;
+    const { CallSid } = req.body;
     const twiml = new twilio.twiml.VoiceResponse();
+
+    // Get voice config from call tracker if available
+    const callData = CallSid ? callTracker.getCall(CallSid) : null;
+    const voiceConfig = callData?.voiceConfig || {};
+    const voiceId = voiceConfig.voiceId || '4tRn1lSkEn13EVTuqb0g';
 
     const gather = twiml.gather({
       input: 'speech',
-      action: `${BASE_URL}/process-speech`,
+      action: `${BASE_URL}/process-speech${conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : ''}`,
       speechTimeout: 'auto',
-      language: 'en-US'
+      language: callData?.language || 'en-US'
     });
 
-        const audioUrl = await voiceService.generateSpeech(
+    const audioUrl = await voiceService.generateSpeech(
       "I'm listening. What would you like to talk about?",
-      '4tRn1lSkEn13EVTuqb0g'
+      voiceId,
+      voiceConfig
     );
     gather.play(audioUrl);
 
-    twiml.redirect(`${BASE_URL}/handle-response`);
+    twiml.redirect(`${BASE_URL}/handle-response${conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : ''}`);
 
     res.type('text/xml');
     res.send(twiml.toString());
@@ -507,50 +761,93 @@ app.post('/handle-response', async (req, res) => {
   }
 });
 
+/**
+ * Process speech endpoint (enhanced with tracking and callbacks)
+ */
 app.post('/process-speech', async (req, res) => {
   try {
+    const { conversationId } = req.query;
     const { SpeechResult, Confidence, CallSid } = req.body;
+
+    // Get call data for voice config
+    const callData = callTracker.getCall(CallSid);
+    const voiceConfig = callData?.voiceConfig || {};
+    const voiceId = voiceConfig.voiceId || '4tRn1lSkEn13EVTuqb0g';
 
     logger.info('Speech received', {
       callSid: CallSid,
+      conversationId,
       speech: SpeechResult,
       confidence: Confidence
     });
 
+    // Update call tracker
+    if (callData) {
+      callTracker.updateStatus(CallSid, 'in-progress');
+      callTracker.updateDuration(CallSid);
+    }
+
     const twiml = new twilio.twiml.VoiceResponse();
 
     if (!SpeechResult) {
-          const audioUrl = await voiceService.generateSpeech(
+      const audioUrl = await voiceService.generateSpeech(
         "Sorry, I didn't quite catch that. Could you say it again?",
-        '4tRn1lSkEn13EVTuqb0g'
+        voiceId,
+        voiceConfig
       );
       twiml.play(audioUrl);
-      twiml.redirect(`${BASE_URL}/handle-response`);
+      twiml.redirect(`${BASE_URL}/handle-response${conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : ''}`);
       res.type('text/xml');
       return res.send(twiml.toString());
     }
 
+    // Add to transcript
+    if (callData) {
+      callTracker.addTranscript(CallSid, 'user', SpeechResult);
+    }
+
     const speech = SpeechResult.toLowerCase().trim();
 
+    // Use conversationId or CallSid for conversation management
+    const convKey = conversationId || CallSid;
+
     if (speech.includes('bye') || speech.includes('goodbye') || speech.includes('hang up')) {
-      const summary = conversationManager.endConversation(CallSid);
+      const summary = conversationManager.endConversation(convKey);
 
       logger.info('Conversation ended', {
         callSid: CallSid,
+        conversationId,
         summary: summary
       });
 
-           const audioUrl = await voiceService.generateSpeech(
+      // End call tracking
+      if (callData) {
+        callTracker.endCall(CallSid, 'completed');
+      }
+
+      const audioUrl = await voiceService.generateSpeech(
         "It was great talking with you! Take care!",
-        '4tRn1lSkEn13EVTuqb0g'
+        voiceId,
+        voiceConfig
       );
       twiml.play(audioUrl);
       twiml.hangup();
     } else {
-      const result = await conversationManager.generateResponse(CallSid, SpeechResult);
+      const result = await conversationManager.generateResponse(convKey, SpeechResult);
+
+      // Update emotion tracking
+      if (callData && result.emotionData) {
+        callTracker.updateEmotion(CallSid, result.emotionData);
+      }
+
+      // Add AI response to transcript
+      if (callData) {
+        callTracker.addTranscript(CallSid, 'assistant', result.response);
+      }
 
       logger.info('AI response with emotion detection', {
         callSid: CallSid,
+        conversationId,
         userInput: SpeechResult,
         emotion: result.emotionData.emotion,
         emotionalIntensity: result.emotionData.intensity,
@@ -566,12 +863,27 @@ app.post('/process-speech', async (req, res) => {
         }
       });
 
-           const audioUrl = await voiceService.generateSpeech(
-        result.response,
-        '4tRn1lSkEn13EVTuqb0g'
-      );
-      twiml.play(audioUrl);
-      twiml.redirect(`${BASE_URL}/handle-response`);
+      // Check if we should end the call
+      if (result.shouldEndCall) {
+        if (callData) {
+          callTracker.endCall(CallSid, 'completed');
+        }
+        const audioUrl = await voiceService.generateSpeech(
+          result.response,
+          voiceId,
+          voiceConfig
+        );
+        twiml.play(audioUrl);
+        twiml.hangup();
+      } else {
+        const audioUrl = await voiceService.generateSpeech(
+          result.response,
+          voiceId,
+          voiceConfig
+        );
+        twiml.play(audioUrl);
+        twiml.redirect(`${BASE_URL}/handle-response${conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : ''}`);
+      }
     }
 
     res.type('text/xml');
@@ -580,16 +892,373 @@ app.post('/process-speech', async (req, res) => {
     logger.error('Error in /process-speech endpoint', { error: error.message });
 
     const twiml = new twilio.twiml.VoiceResponse();
-        const audioUrl = await voiceService.generateSpeech(
+    const audioUrl = await voiceService.generateSpeech(
       "Hmm, I'm having a bit of trouble there. Can you try again?",
       '4tRn1lSkEn13EVTuqb0g'
     );
     twiml.play(audioUrl);
-    twiml.redirect('/voice');
+    twiml.redirect(`${BASE_URL}/handle-response`);
 
     res.type('text/xml');
     res.send(twiml.toString());
   }
+});
+
+/**
+ * Call status callback from Twilio
+ */
+app.post('/call-status-callback', async (req, res) => {
+  try {
+    const { conversationId, callbackUrl } = req.query;
+    const { CallSid, CallStatus, CallDuration } = req.body;
+
+    logger.info('Call status callback received', {
+      callSid: CallSid,
+      conversationId,
+      status: CallStatus,
+      duration: CallDuration
+    });
+
+    // Update call tracker
+    const callData = callTracker.getCall(CallSid);
+    if (callData) {
+      callTracker.updateStatus(CallSid, CallStatus);
+      
+      if (CallStatus === 'completed' || CallStatus === 'failed' || CallStatus === 'busy' || CallStatus === 'no-answer') {
+        callTracker.endCall(CallSid, CallStatus);
+        
+        // Send webhook if callback URL was provided
+        if (callbackUrl) {
+          const webhookData = callTracker.getCallDataForWebhook(CallSid);
+          if (webhookData) {
+            webhookService.queueWebhook(callbackUrl, webhookData);
+          }
+        }
+        
+        // Cleanup after delay
+        setTimeout(() => {
+          callTracker.removeCall(CallSid);
+        }, 60000); // Keep for 1 minute after completion
+      }
+    }
+
+    res.sendStatus(200);
+  } catch (error) {
+    logger.error('Error in call status callback', { error: error.message });
+    res.sendStatus(500);
+  }
+});
+
+/**
+ * Recording callback from Twilio
+ */
+app.post('/recording-callback', async (req, res) => {
+  try {
+    const { conversationId } = req.query;
+    const { CallSid, RecordingUrl, RecordingSid, RecordingStatus } = req.body;
+
+    logger.info('Recording callback received', {
+      callSid: CallSid,
+      conversationId,
+      recordingSid: RecordingSid,
+      status: RecordingStatus,
+      url: RecordingUrl
+    });
+
+    if (RecordingStatus === 'completed' && RecordingUrl) {
+      callTracker.setRecording(CallSid, RecordingUrl);
+    }
+
+    res.sendStatus(200);
+  } catch (error) {
+    logger.error('Error in recording callback', { error: error.message });
+    res.sendStatus(500);
+  }
+});
+
+/**
+ * GET /call-status/:callSid - Real-time call status endpoint
+ */
+app.get('/call-status/:callSid', (req, res) => {
+  try {
+    const { callSid } = req.params;
+
+    if (!callSid) {
+      return res.status(400).json({
+        success: false,
+        error: 'callSid parameter is required'
+      });
+    }
+
+    const status = callTracker.getCallStatus(callSid);
+
+    if (!status) {
+      return res.status(404).json({
+        success: false,
+        error: 'Call not found',
+        details: 'The specified call SID was not found in active calls'
+      });
+    }
+
+    res.json({
+      success: true,
+      ...status
+    });
+  } catch (error) {
+    logger.error('Error getting call status', { error: error.message });
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api-docs - API documentation endpoint
+ */
+app.get('/api-docs', (req, res) => {
+  const apiDocs = {
+    version: '2.0.0',
+    title: 'AI Call Bot Enterprise API',
+    description: 'Enterprise-grade voice agent API with HIYA-level capabilities',
+    baseUrl: BASE_URL,
+    endpoints: {
+      'POST /make-call': {
+        description: 'Initiate an outbound AI voice call',
+        parameters: {
+          required: {
+            to: {
+              type: 'string',
+              description: 'Phone number in E.164 format (e.g., +14155551234)'
+            }
+          },
+          voiceConfiguration: {
+            voiceId: {
+              type: 'string',
+              default: '4tRn1lSkEn13EVTuqb0g',
+              description: 'ElevenLabs voice ID'
+            },
+            voiceStability: {
+              type: 'float',
+              default: 0.5,
+              range: '0.0-1.0',
+              description: 'Voice consistency/stability'
+            },
+            voiceSimilarityBoost: {
+              type: 'float',
+              default: 0.75,
+              range: '0.0-1.0',
+              description: 'Voice clarity/similarity boost'
+            },
+            voiceStyle: {
+              type: 'float',
+              default: 0.0,
+              range: '0.0-1.0',
+              description: 'Style exaggeration'
+            },
+            speakingRate: {
+              type: 'float',
+              default: 1.0,
+              range: '0.5-2.0',
+              description: 'Speech speed multiplier'
+            }
+          },
+          conversationControl: {
+            message: {
+              type: 'string',
+              default: "Hey there! I'm your AI assistant. What can I help you with?",
+              description: 'Initial greeting/script'
+            },
+            systemPrompt: {
+              type: 'string',
+              default: null,
+              description: 'AI personality/behavior instructions'
+            },
+            conversationMode: {
+              type: 'string',
+              default: 'interactive',
+              options: ['interactive', 'scripted', 'faq'],
+              description: 'Conversation behavior mode'
+            },
+            maxDuration: {
+              type: 'integer',
+              default: 600,
+              range: '1-3600',
+              description: 'Maximum call length in seconds'
+            },
+            language: {
+              type: 'string',
+              default: 'en-US',
+              description: 'Speech recognition language'
+            }
+          },
+          advancedFeatures: {
+            enableEmotionDetection: {
+              type: 'boolean',
+              default: true,
+              description: 'Detect caller emotions'
+            },
+            enableInterruptions: {
+              type: 'boolean',
+              default: true,
+              description: 'Allow caller to interrupt AI'
+            },
+            sentimentAnalysis: {
+              type: 'boolean',
+              default: true,
+              description: 'Track conversation sentiment'
+            },
+            recordCall: {
+              type: 'boolean',
+              default: false,
+              description: 'Save call recording'
+            },
+            callbackUrl: {
+              type: 'string',
+              default: null,
+              description: 'Webhook URL for call completion'
+            },
+            metadata: {
+              type: 'object',
+              default: {},
+              description: 'Custom tracking data'
+            }
+          },
+          leadQualification: {
+            qualificationQuestions: {
+              type: 'array',
+              default: [],
+              description: 'Questions for lead scoring'
+            },
+            transferNumber: {
+              type: 'string',
+              default: null,
+              description: 'Human agent transfer number'
+            },
+            transferConditions: {
+              type: 'array',
+              default: [],
+              description: 'Conditions triggering transfer'
+            }
+          },
+          schedulingIntegration: {
+            calendarIntegration: {
+              type: 'boolean',
+              default: false,
+              description: 'Enable appointment booking'
+            },
+            crmSync: {
+              type: 'boolean',
+              default: false,
+              description: 'Sync call data to CRM'
+            },
+            timezone: {
+              type: 'string',
+              default: 'America/Los_Angeles',
+              description: 'Caller timezone'
+            }
+          }
+        },
+        response: {
+          success: 'boolean',
+          callSid: 'string - Twilio call SID',
+          to: 'string - Called phone number',
+          conversationId: 'string - Unique conversation identifier',
+          estimatedDuration: 'integer - Max call duration in seconds',
+          voiceConfig: {
+            voiceId: 'string - Voice ID used',
+            voiceName: 'string - Voice name'
+          },
+          timestamp: 'string - ISO 8601 timestamp'
+        },
+        example: {
+          request: {
+            to: '+14155551234',
+            message: 'Hello! This is an AI calling to discuss our services.',
+            voiceId: '4tRn1lSkEn13EVTuqb0g',
+            voiceStability: 0.6,
+            speakingRate: 1.1,
+            systemPrompt: 'You are a friendly AI assistant for a software company.',
+            enableEmotionDetection: true,
+            metadata: { campaignId: 'test-001' }
+          },
+          response: {
+            success: true,
+            callSid: 'CA1234567890abcdef',
+            to: '+14155551234',
+            conversationId: 'conv_uuid-here',
+            estimatedDuration: 600,
+            voiceConfig: {
+              voiceId: '4tRn1lSkEn13EVTuqb0g',
+              voiceName: 'serafina'
+            },
+            timestamp: '2025-11-25T10:00:00.000Z'
+          }
+        }
+      },
+      'GET /call-status/:callSid': {
+        description: 'Get real-time status of an active call',
+        parameters: {
+          callSid: {
+            type: 'string',
+            location: 'path',
+            description: 'Twilio call SID'
+          }
+        },
+        response: {
+          success: 'boolean',
+          callSid: 'string',
+          conversationId: 'string',
+          status: 'string - Call status (initiated, ringing, in-progress, completed)',
+          duration: 'integer - Current call duration in seconds',
+          currentEmotion: 'string - Current detected emotion',
+          transcript: 'string - Call transcript so far',
+          sentiment: {
+            overall: 'string - positive/neutral/negative',
+            score: 'number - Sentiment score'
+          },
+          metadata: 'object - Custom metadata'
+        }
+      },
+      'GET /health': {
+        description: 'Health check endpoint',
+        response: {
+          status: 'string',
+          timestamp: 'string',
+          uptime: 'integer',
+          memory: 'object',
+          configuration: 'object'
+        }
+      }
+    },
+    webhookPayload: {
+      description: 'Payload sent to callbackUrl on call completion',
+      fields: {
+        callSid: 'string',
+        conversationId: 'string',
+        status: 'string - completed/failed/busy/no-answer',
+        duration: 'integer - Call duration in seconds',
+        transcript: 'string - Full call transcript',
+        sentiment: {
+          overall: 'string',
+          score: 'number'
+        },
+        emotions: 'array - Emotion history',
+        leadQualification: 'object - Lead scoring data',
+        recording: 'string - Recording URL (if enabled)',
+        metadata: 'object - Custom metadata',
+        timestamp: 'string - ISO 8601 timestamp'
+      }
+    },
+    errorCodes: {
+      400: 'Bad Request - Invalid parameters',
+      404: 'Not Found - Resource not found',
+      500: 'Internal Server Error - Server configuration or runtime error'
+    },
+    availableVoices: voiceService.getVoices()
+  };
+
+  res.json(apiDocs);
 });
 
 
@@ -625,6 +1294,7 @@ const server = app.listen(PORT, HOST, () => {
   console.log(`Environment: ${NODE_ENV}`);
   console.log(`Server: http://${HOST}:${PORT}`);
   console.log(`Health Check: http://${HOST}:${PORT}/health`);
+  console.log(`API Docs: http://${HOST}:${PORT}/api-docs`);
   console.log(`Twilio Webhook: ${webhookUrl}`);
   console.log('============================================================');
 
@@ -634,8 +1304,11 @@ const server = app.listen(PORT, HOST, () => {
     environment: NODE_ENV
   });
 
+  // Periodic cleanup
   setInterval(() => {
     conversationManager.cleanupOldConversations();
+    callTracker.cleanupOldCalls();
+    voiceService.cleanupOldAudioFiles();
   }, 5 * 60 * 1000);
 });
 
