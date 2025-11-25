@@ -111,11 +111,24 @@ const getMemoryUsage = () => {
 
 // Dashboard routes
 app.get('/dashboard', (req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'public', 'dashboard', 'index.html'));
+  const filePath = path.resolve(__dirname, '..', 'public', 'dashboard', 'index.html');
+  console.log('Attempting to serve dashboard from:', filePath);
+  res.sendFile(filePath, (err) => {
+    if (err) {
+      console.error('Error serving dashboard:', err);
+      res.status(500).json({ error: 'Dashboard not found', path: filePath });
+    }
+  });
 });
 
 app.get('/dashboard/', (req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'public', 'dashboard', 'index.html'));
+  const filePath = path.resolve(__dirname, '..', 'public', 'dashboard', 'index.html');
+  res.sendFile(filePath, (err) => {
+    if (err) {
+      console.error('Error serving dashboard:', err);
+      res.status(500).json({ error: 'Dashboard not found', path: filePath });
+    }
+  });
 });
 
 app.get('/', (req, res) => {
@@ -697,6 +710,7 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 module.exports = { app, server, wss };
+
 
 
 
