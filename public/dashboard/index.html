@@ -3,32 +3,231 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard</title>
-    <link rel="stylesheet" href="styles.css"> <!-- Assuming there's a CSS file to style the dashboard -->
+    <title>AI Call Bot - Command Center</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container { max-width: 1200px; margin: 0 auto; }
+        
+        .header {
+            background: white;
+            border-radius: 20px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        }
+        
+        .header h1 { color: #333; font-size: 2.5em; margin-bottom: 10px; }
+        .header p { color: #666; font-size: 1.1em; }
+        
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+            gap: 20px;
+        }
+        
+        .card {
+            background: white;
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        }
+        
+        .card h2 { color: #333; margin-bottom: 20px; font-size: 1.8em; }
+        
+        .form-group { margin-bottom: 20px; }
+        
+        .form-group label {
+            display: block;
+            color: #666;
+            margin-bottom: 8px;
+            font-weight: 500;
+        }
+        
+        .form-group input,
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 1em;
+            transition: border-color 0.3s;
+        }
+        
+        .form-group input:focus,
+        .form-group select:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .form-group textarea { min-height: 100px; resize: vertical; }
+        
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 1.1em;
+            font-weight: bold;
+            border-radius: 8px;
+            cursor: pointer;
+            width: 100%;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+        
+        .btn:active { transform: translateY(0); }
+        
+        .status-message {
+            margin-top: 15px;
+            padding: 15px;
+            border-radius: 8px;
+            display: none;
+        }
+        
+        .status-message.success {
+            background: #d1fae5;
+            color: #065f46;
+            border: 2px solid #10b981;
+        }
+        
+        .status-message.error {
+            background: #fee2e2;
+            color: #991b1b;
+            border: 2px solid #ef4444;
+        }
+        
+        .script-preview {
+            background: #f7f9fc;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+            border-left: 4px solid #667eea;
+        }
+        
+        .script-preview h3 { color: #333; margin-bottom: 10px; }
+        .script-preview p { color: #666; line-height: 1.6; }
+    </style>
 </head>
 <body>
     <div class="container">
-        <h1>Professional Dashboard</h1>
-        <form id="dashboard-form">
-            <label for="phone-number">Phone Number:</label>
-            <input type="tel" id="phone-number" name="phone-number" required>
+        <div class="header">
+            <h1>🤖 AI Call Bot - Command Center</h1>
+            <p>Dial, manage scripts, and control your AI sales agent</p>
+        </div>
 
-            <label for="script-selector">Select Script:</label>
-            <select id="script-selector" name="script-selector">
-                <option value="script1">Script 1</option>
-                <option value="script2">Script 2</option>
-                <option value="script3">Script 3</option>
-            </select>
+        <div class="dashboard-grid">
+            <div class="card">
+                <h2>📞 Quick Dial</h2>
+                <form id="dial-form">
+                    <div class="form-group">
+                        <label for="phone-number">Phone Number</label>
+                        <input type="tel" id="phone-number" placeholder="+1 (916) 599-5094" required>
+                    </div>
 
-            <label for="voice-selector">Select Voice:</label>
-            <select id="voice-selector" name="voice-selector">
-                <option value="voice1">Voice 1</option>
-                <option value="voice2">Voice 2</option>
-                <option value="voice3">Voice 3</option>
-            </select>
+                    <div class="form-group">
+                        <label for="script-type">Call Script</label>
+                        <select id="script-type">
+                            <option value="sales">Sales Pitch</option>
+                            <option value="follow-up">Follow-Up Call</option>
+                            <option value="appointment">Appointment Reminder</option>
+                            <option value="prank">Prank Call (Derreck)</option>
+                            <option value="custom">Custom Message</option>
+                        </select>
+                    </div>
 
-            <button type="submit">Dial</button>
-        </form>
+                    <div class="form-group" id="custom-message-group" style="display: none;">
+                        <label for="custom-message">Custom Message</label>
+                        <textarea id="custom-message" placeholder="Type your custom message..."></textarea>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="voice-id">Voice</label>
+                        <select id="voice-id">
+                            <option value="4tRn1lSkEn13EVTuqb0g">Serafina (Sexy, Confident)</option>
+                            <option value="21m00Tcm4TlvDq8ikWAM">Rachel (Clear, Warm)</option>
+                            <option value="EXAVITQu4vr4xnSDxMaL">Sarah (Professional)</option>
+                        </select>
+                    </div>
+
+                    <button type="submit" class="btn">🎯 DIAL NOW</button>
+                    <div id="status-message" class="status-message"></div>
+                </form>
+            </div>
+
+            <div class="card">
+                <h2>📝 Script Preview</h2>
+                <div id="script-preview" class="script-preview">
+                    <h3>Sales Pitch</h3>
+                    <p>Sara will introduce herself and pitch your advertising services professionally.</p>
+                </div>
+            </div>
+        </div>
     </div>
+
+    <script>
+        const scripts = {
+            sales: { title: "Sales Pitch", msg: "Hey there! This is Sara from AdCo. I'm calling because we help local businesses get more customers through targeted advertising. Do you have 30 seconds?" },
+            'follow-up': { title: "Follow-Up Call", msg: "Hey! This is Sara from AdCo. We spoke last week about our advertising services. I wanted to follow up and see if you had any questions!" },
+            appointment: { title: "Appointment Reminder", msg: "Hi there! This is Sara from AdCo. Just calling to remind you about our meeting. Looking forward to talking with you!" },
+            prank: { title: "Prank (Derreck)", msg: "Hey Derreck, you don't know me yet, but I'm your new business partner. My name is Sara. My creator, MR PRESIDENTE, says you should pump the brakes and call him! Thanks!" },
+            custom: { title: "Custom Message", msg: "" }
+        };
+
+        document.getElementById('script-type').addEventListener('change', function() {
+            const type = this.value;
+            document.getElementById('custom-message-group').style.display = type === 'custom' ? 'block' : 'none';
+            document.getElementById('script-preview').innerHTML = `<h3>${scripts[type].title}</h3><p>${scripts[type].msg || 'Your custom message will be spoken.'}</p>`;
+        });
+
+        document.getElementById('dial-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const phone = document.getElementById('phone-number').value;
+            const type = document.getElementById('script-type').value;
+            const voice = document.getElementById('voice-id').value;
+            const custom = document.getElementById('custom-message').value;
+            const status = document.getElementById('status-message');
+            
+            const message = type === 'custom' ? custom : scripts[type].msg;
+            
+            status.style.display = 'block';
+            status.className = 'status-message';
+            status.textContent = '⏳ Initiating call...';
+            
+            try {
+                const res = await fetch('/make-call', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ to: phone, message, voiceId: voice })
+                });
+                
+                const data = await res.json();
+                
+                if (res.ok) {
+                    status.className = 'status-message success';
+                    status.textContent = `✅ Call initiated! SID: ${data.callSid}`;
+                } else {
+                    status.className = 'status-message error';
+                    status.textContent = `❌ Error: ${data.error}`;
+                }
+            } catch (err) {
+                status.className = 'status-message error';
+                status.textContent = `❌ Error: ${err.message}`;
+            }
+        });
+    </script>
 </body>
 </html>
