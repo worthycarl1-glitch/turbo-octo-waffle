@@ -3,11 +3,31 @@ const { Readable } = require('stream');
 const fs = require('fs').promises;
 const path = require('path');
 
+// Response cache for common phrases (24 hour TTL)
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
 class VoiceService {
   constructor() {
     this.client = null;
     this.defaultVoiceId = 'EXAVITQu4vr4xnSDxMaL'; // Sarah - natural, professional female voice
     this.audioDir = path.join(__dirname, '../public/audio');
+    
+    // Response cache for common phrases
+    this.responseCache = new Map();
+    
+    // Common phrases to cache
+    this.commonPhrases = [
+      'hello',
+      'yes',
+      'no',
+      'goodbye',
+      'thank you',
+      'thanks',
+      'okay',
+      'sure',
+      'one moment',
+      'please hold'
+    ];
     
     // Default voice settings
     this.defaultSettings = {
@@ -27,6 +47,74 @@ class VoiceService {
     this.ensureAudioDir();
   }
 
+  /**
+   * Generate cache key for a phrase
+   * @param {string} text - Text to cache
+   * @param {string} voiceId - Voice ID
+   */
+  getCacheKey(text, voiceId) {
+    const normalizedText = text.toLowerCase().trim();
+    return `${voiceId}:${normalizedText}`;
+  }
+
+  /**
+   * Check if text is a common phrase that should be cached
+   * @param {string} text 
+   */
+  isCommonPhrase(text) {
+    const normalizedText = text.toLowerCase().trim();
+    return this.commonPhrases.some(phrase => 
+      normalizedText === phrase || 
+      normalizedText.startsWith(phrase + ' ') ||
+      normalizedText.endsWith(' ' + phrase)
+    );
+  }
+
+  /**
+   * Get cached response if available and not expired
+   * @param {string} cacheKey 
+   */
+  getCachedResponse(cacheKey) {
+    const cached = this.responseCache.get(cacheKey);
+    if (!cached) {
+      return null;
+    }
+    
+    // Check if cache entry has expired
+    if (Date.now() - cached.timestamp > CACHE_TTL_MS) {
+      this.responseCache.delete(cacheKey);
+      return null;
+    }
+    
+    console.log('Cache hit for phrase:', cacheKey);
+    return cached.url;
+  }
+
+  /**
+   * Store response in cache
+   * @param {string} cacheKey 
+   * @param {string} url 
+   */
+  setCachedResponse(cacheKey, url) {
+    this.responseCache.set(cacheKey, {
+      url,
+      timestamp: Date.now()
+    });
+    console.log('Cached response for:', cacheKey);
+  }
+
+  /**
+   * Clean up expired cache entries
+   */
+  cleanupCache() {
+    const now = Date.now();
+    for (const [key, value] of this.responseCache.entries()) {
+      if (now - value.timestamp > CACHE_TTL_MS) {
+        this.responseCache.delete(key);
+      }
+    }
+  }
+
   async ensureAudioDir() {
     try {
       await fs.mkdir(this.audioDir, { recursive: true });
@@ -44,16 +132,28 @@ class VoiceService {
    * @param {number} options.similarityBoost - Voice similarity boost (0.0-1.0)
    * @param {number} options.style - Voice style (0.0-1.0)
    * @param {number} options.speakingRate - Speaking rate multiplier (0.5-2.0)
+   * @param {boolean} enableCache - Whether to use response caching (default: true)
    */
-  async generateSpeech(text, voiceId, options = {}) {
+  async generateSpeech(text, voiceId, options = {}, enableCache = true) {
     if (!this.client) {
       throw new Error('ElevenLabs not configured. Add ELEVENLABS_API_KEY to environment variables.');
     }
 
     try {
+      const effectiveVoiceId = voiceId || this.defaultVoiceId;
+      
+      // Check cache for common phrases if caching is enabled
+      if (enableCache && this.isCommonPhrase(text)) {
+        const cacheKey = this.getCacheKey(text, effectiveVoiceId);
+        const cachedUrl = this.getCachedResponse(cacheKey);
+        if (cachedUrl) {
+          return cachedUrl;
+        }
+      }
+
       // Merge with defaults
       const voiceOptions = {
-        voiceId: voiceId || this.defaultVoiceId,
+        voiceId: effectiveVoiceId,
         stability: this.validateRange(options.stability, 0, 1, this.defaultSettings.stability),
         similarityBoost: this.validateRange(options.similarityBoost, 0, 1, this.defaultSettings.similarityBoost),
         style: this.validateRange(options.style, 0, 1, this.defaultSettings.style),
@@ -66,7 +166,8 @@ class VoiceService {
         stability: voiceOptions.stability,
         similarityBoost: voiceOptions.similarityBoost,
         style: voiceOptions.style,
-        speakingRate: voiceOptions.speakingRate
+        speakingRate: voiceOptions.speakingRate,
+        cacheEnabled: enableCache
       });
 
       // Generate audio buffer
@@ -84,7 +185,15 @@ class VoiceService {
         ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
         : process.env.RAILWAY_STATIC_URL || 'http://localhost:3000';
       
-      return `${baseUrl}/audio/${filename}`;
+      const audioUrl = `${baseUrl}/audio/${filename}`;
+      
+      // Cache the response if it's a common phrase and caching is enabled
+      if (enableCache && this.isCommonPhrase(text)) {
+        const cacheKey = this.getCacheKey(text, effectiveVoiceId);
+        this.setCachedResponse(cacheKey, audioUrl);
+      }
+      
+      return audioUrl;
     } catch (error) {
       console.error('Error in generateSpeech:', error);
       throw error;
