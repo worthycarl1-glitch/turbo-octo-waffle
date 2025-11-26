@@ -713,7 +713,15 @@ app.post('/make-call', async (req, res) => {
         });
 
         // Initialize call tracking for agent-based call
-        callTracker.initCall(result.callSid || conversationId, {
+        // ElevenLabs returns call_sid, but we validate it exists for proper tracking
+        const trackingId = result.callSid || conversationId;
+        if (!result.callSid) {
+          logger.warn('ElevenLabs did not return a callSid, using conversationId for tracking', {
+            conversationId
+          });
+        }
+        
+        callTracker.initCall(trackingId, {
           conversationId: result.conversationId || conversationId,
           to,
           agentId: effectiveAgentId,

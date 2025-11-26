@@ -398,7 +398,7 @@ class ElevenLabsAgentService {
         const errorData = await response.json().catch(() => ({}));
         return {
           success: false,
-          error: `ElevenLabs API error: ${response.status}`,
+          error: `ElevenLabs API error: ${response.status} ${response.statusText}`,
           details: errorData
         };
       }
