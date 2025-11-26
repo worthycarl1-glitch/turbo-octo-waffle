@@ -2076,7 +2076,10 @@ wss.on('connection', (ws, req) => {
               type: 'conversation_initiation_client_data',
               conversation_initiation_client_data: {
                 conversation_id: conversationId,
-                custom_llm_extra_body: {}
+                audio_interface: {
+                  input_audio_format: 'mulaw_8000',   // Twilio sends µ-law 8kHz
+                  output_audio_format: 'mulaw_8000'   // Twilio expects µ-law 8kHz
+                }
               }
             }));
           });
