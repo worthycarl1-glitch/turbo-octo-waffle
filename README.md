@@ -300,6 +300,94 @@ app.post('/webhook', (req, res) => {
 
 ---
 
+## 🎯 Dynamic Prompt Customization
+
+Customize agent behavior per call without changing agent configuration in ElevenLabs dashboard.
+
+### Basic Usage
+
+```javascript
+POST /make-call
+{
+  "to": "+14155551234",
+  "agentId": "agent_abc123",
+  "customPrompt": "You are calling {{customer_name}} about {{reason}}. Be friendly.",
+  "firstMessage": "Hi {{customer_name}}!",
+  "dynamicVariables": {
+    "customer_name": "John Smith",
+    "reason": "appointment scheduling",
+    "available_times": "2pm, 3pm, 4pm"
+  }
+}
+```
+
+### Features
+
+- **Override system prompt per call** - Customize agent behavior dynamically
+- **Override first message per call** - Personalize the greeting
+- **Pass dynamic variables** - Inject customer data, context, etc.
+- **Variable interpolation** - Use `{{variable_name}}` syntax in prompts
+- **Override language per call** - `overrideLanguage` parameter
+- **Override voice per call** - `overrideVoiceId` parameter
+
+### Use Cases
+
+| Use Case | Example Variables |
+|----------|-------------------|
+| **Appointment Scheduling** | `customer_name`, `available_times`, `service_type` |
+| **Payment Reminders** | `customer_name`, `amount`, `due_date` |
+| **Lead Qualification** | `customer_name`, `product`, `company` |
+| **Campaign Messaging** | `offer_details`, `expiry_date` |
+
+### Example: Appointment Scheduling
+
+```javascript
+{
+  "to": "+15551234567",
+  "agentId": "agent_scheduler",
+  "customPrompt": "Schedule appointment for {{customer_name}}. Available: {{times}}. Confirm and provide calendar invite.",
+  "firstMessage": "Hi {{customer_name}}! Let's find a time for your {{service}}.",
+  "dynamicVariables": {
+    "customer_name": "Jane Doe",
+    "service": "product demo",
+    "times": "Mon 2pm, Tue 10am, Wed 3pm"
+  }
+}
+```
+
+### Example: Payment Reminder
+
+```javascript
+{
+  "to": "+15551234567",
+  "agentId": "agent_billing",
+  "customPrompt": "Remind {{customer_name}} about {{amount}} payment due {{date}}. Offer payment link.",
+  "firstMessage": "Hi {{customer_name}}, this is a friendly reminder about your upcoming payment.",
+  "dynamicVariables": {
+    "customer_name": "Bob Smith",
+    "amount": "$99.99",
+    "date": "Dec 1st"
+  }
+}
+```
+
+### Benefits
+
+- ✅ **CRM Control** - Configure scripts from your CRM UI
+- ✅ **Personalization** - Each call customized per customer
+- ✅ **No Agent Duplication** - One agent, many configurations
+- ✅ **Dynamic Workflows** - Pass real-time data (calendar, CRM)
+- ✅ **A/B Testing** - Test different prompts without agent changes
+- ✅ **Multi-tenant** - Same agent, different customer contexts
+
+### Backward Compatibility
+
+- ✅ Existing calls without customization work unchanged
+- ✅ All customization parameters are optional
+- ✅ Falls back to agent defaults from ElevenLabs dashboard
+
+---
+
 ## 📖 Migration Guide
 
 ### From Legacy to Agent Mode

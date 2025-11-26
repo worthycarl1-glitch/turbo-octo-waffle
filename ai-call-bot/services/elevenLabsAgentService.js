@@ -357,9 +357,15 @@ class ElevenLabsAgentService {
    * @param {string} agentId - Agent ID
    * @param {string} phoneNumberId - ElevenLabs phone number ID
    * @param {string} toNumber - Phone number to call (E.164 format)
+   * @param {object} customization - Optional dynamic customization options
+   * @param {string} customization.customPrompt - Override agent system prompt
+   * @param {string} customization.firstMessage - Override first message
+   * @param {object} customization.dynamicVariables - Key-value pairs for variable interpolation
+   * @param {string} customization.overrideLanguage - Override agent language
+   * @param {string} customization.overrideVoiceId - Override agent voice
    * @returns {Promise<object>} Call initiation response
    */
-  async initiateOutboundCall(agentId, phoneNumberId, toNumber) {
+  async initiateOutboundCall(agentId, phoneNumberId, toNumber, customization = {}) {
     if (!this.isConfigured()) {
       return {
         success: false,
@@ -378,17 +384,75 @@ class ElevenLabsAgentService {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
+      // Build the base payload
+      const elevenLabsPayload = {
+        agent_id: agentId,
+        agent_phone_number_id: phoneNumberId,
+        to_number: toNumber
+      };
+
+      // Extract customization options
+      const {
+        customPrompt = null,
+        firstMessage = null,
+        dynamicVariables = {},
+        overrideLanguage = null,
+        overrideVoiceId = null
+      } = customization;
+
+      // Add dynamic customization if any options are provided
+      const hasDynamicVariables = dynamicVariables && Object.keys(dynamicVariables).length > 0;
+      if (customPrompt || firstMessage || hasDynamicVariables || overrideLanguage || overrideVoiceId) {
+        elevenLabsPayload.conversation_initiation_client_data = {};
+        
+        // Add dynamic variables
+        if (hasDynamicVariables) {
+          elevenLabsPayload.conversation_initiation_client_data.dynamic_variables = dynamicVariables;
+        }
+        
+        // Build conversation config override
+        const configOverride = {};
+        
+        if (customPrompt || firstMessage || overrideLanguage) {
+          configOverride.agent = {};
+          
+          if (customPrompt) {
+            configOverride.agent.prompt = { prompt: customPrompt };
+          }
+          
+          if (firstMessage) {
+            configOverride.agent.first_message = firstMessage;
+          }
+          
+          if (overrideLanguage) {
+            configOverride.agent.language = overrideLanguage;
+          }
+        }
+        
+        if (overrideVoiceId) {
+          configOverride.tts = { voice_id: overrideVoiceId };
+        }
+        
+        if (Object.keys(configOverride).length > 0) {
+          elevenLabsPayload.conversation_initiation_client_data.conversation_config_override = configOverride;
+        }
+        
+        console.log('Using dynamic customization for call', {
+          hasCustomPrompt: !!customPrompt,
+          hasFirstMessage: !!firstMessage,
+          dynamicVariablesCount: Object.keys(dynamicVariables).length,
+          hasLanguageOverride: !!overrideLanguage,
+          hasVoiceOverride: !!overrideVoiceId
+        });
+      }
+
       const response = await fetch('https://api.elevenlabs.io/v1/convai/twilio/outbound-call', {
         method: 'POST',
         headers: {
           'xi-api-key': process.env.ELEVENLABS_API_KEY,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-          agent_id: agentId,
-          agent_phone_number_id: phoneNumberId,
-          to_number: toNumber
-        }),
+        body: JSON.stringify(elevenLabsPayload),
         signal: controller.signal
       });
 
