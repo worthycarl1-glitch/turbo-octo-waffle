@@ -5,6 +5,7 @@
 
 const ELEVENLABS_API_BASE = 'https://api.elevenlabs.io/v1/convai/agents';
 const AGENTS_CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+const REQUEST_TIMEOUT_MS = 30000; // 30 seconds
 
 class ElevenLabsAgentService {
   constructor() {
@@ -58,7 +59,7 @@ class ElevenLabsAgentService {
 
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000);
+      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
       const response = await fetch(ELEVENLABS_API_BASE, {
         method: 'GET',
@@ -169,7 +170,7 @@ class ElevenLabsAgentService {
 
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000);
+      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
       const response = await fetch(`${ELEVENLABS_API_BASE}/${agentId}`, {
         method: 'GET',
@@ -284,7 +285,7 @@ class ElevenLabsAgentService {
       }
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000);
+      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
       const response = await fetch(ELEVENLABS_API_BASE, {
         method: 'POST',
