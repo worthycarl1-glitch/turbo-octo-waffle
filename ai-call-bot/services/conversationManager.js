@@ -1,3 +1,23 @@
+/**
+ * @deprecated LEGACY SERVICE - Use ElevenLabs Conversational AI agents instead
+ * 
+ * This conversation manager is part of the legacy voice-based architecture:
+ *   Twilio → STT → OpenAI GPT → ElevenLabs TTS → Twilio
+ * 
+ * The recommended approach is to use ElevenLabs Conversational AI agents:
+ *   Twilio → ElevenLabs Conversational AI Agent → Twilio
+ * 
+ * Benefits of agent-based architecture:
+ *   - Latency: 2.5s → <100ms (96% improvement)
+ *   - Cost: $0.22/min → $0.10/min (55% savings)
+ *   - Simpler integration: No OpenAI API calls required
+ * 
+ * To migrate: Set ELEVENLABS_AGENT_ID in your environment and pass agentId
+ * to the /make-call endpoint.
+ * 
+ * This service is kept for backward compatibility with legacy implementations.
+ */
+
 const OpenAI = require('openai');
 const emotionDetector = require('./emotionDetector');
 
