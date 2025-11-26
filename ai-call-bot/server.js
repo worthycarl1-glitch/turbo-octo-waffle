@@ -1196,6 +1196,33 @@ app.post('/handle-response', async (req, res) => {
 });
 
 /**
+ * WebSocket endpoint for Twilio Media Streams
+ * Handles real-time audio streaming to caller
+ */
+app.post('/media-stream', async (req, res) => {
+  const { conversationId } = req.query;
+  
+  // Return TwiML that starts a Media Stream
+  const twiml = new twilio.twiml.VoiceResponse();
+  
+  // Construct WebSocket URL using similar logic to BASE_URL
+  const wsHost = process.env.RAILWAY_PUBLIC_DOMAIN || `localhost:${PORT}`;
+  const wsProtocol = process.env.RAILWAY_PUBLIC_DOMAIN ? 'wss' : 'ws';
+  
+  const start = twiml.start();
+  start.stream({
+    name: `stream_${conversationId}`,
+    url: `${wsProtocol}://${wsHost}/media-websocket?conversationId=${conversationId}`
+  });
+  
+  // Pause to keep the call alive while streaming
+  twiml.pause({ length: 60 });
+  
+  res.type('text/xml');
+  res.send(twiml.toString());
+});
+
+/**
  * Process speech endpoint (enhanced with tracking and callbacks)
  */
 app.post('/process-speech', async (req, res) => {
@@ -1308,24 +1335,43 @@ app.post('/process-speech', async (req, res) => {
         if (callData) {
           callTracker.endCall(CallSid, 'completed');
         }
-        const audioUrl = await voiceService.generateSpeech(
-          result.response,
-          voiceId,
-          voiceConfig,
-          true,
-          ttsProvider
-        );
-        twiml.play(audioUrl);
+        
+        // Get WebSocket connection for this conversation
+        const mediaWs = global.mediaStreamConnections?.get(conversationId);
+        
+        if (mediaWs && mediaWs.streamAudio && ttsProvider === 'elevenlabs') {
+          // Stream audio in real-time via WebSocket
+          await mediaWs.streamAudio(result.response, callData);
+        } else {
+          // Fallback to file-based playback if WebSocket not available
+          const audioUrl = await voiceService.generateSpeech(
+            result.response,
+            voiceId,
+            voiceConfig,
+            true,
+            ttsProvider
+          );
+          twiml.play(audioUrl);
+        }
         twiml.hangup();
       } else {
-        const audioUrl = await voiceService.generateSpeech(
-          result.response,
-          voiceId,
-          voiceConfig,
-          true,
-          ttsProvider
-        );
-        twiml.play(audioUrl);
+        // Get WebSocket connection for this conversation
+        const mediaWs = global.mediaStreamConnections?.get(conversationId);
+        
+        if (mediaWs && mediaWs.streamAudio && ttsProvider === 'elevenlabs') {
+          // Stream audio in real-time via WebSocket
+          await mediaWs.streamAudio(result.response, callData);
+        } else {
+          // Fallback to file-based playback if WebSocket not available
+          const audioUrl = await voiceService.generateSpeech(
+            result.response,
+            voiceId,
+            voiceConfig,
+            true,
+            ttsProvider
+          );
+          twiml.play(audioUrl);
+        }
         twiml.redirect(`${BASE_URL}/handle-response${conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : ''}`);
       }
     }
@@ -1896,7 +1942,147 @@ const server = app.listen(PORT, HOST, () => {
 
 const wss = new WebSocketServer({ server });
 
-wss.on('connection', (ws) => {
+/**
+ * Handle Twilio Media Stream WebSocket for real-time audio streaming
+ */
+async function handleMediaStreamConnection(ws, req) {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const conversationId = url.searchParams.get('conversationId');
+  const streamSid = uuidv4();
+  
+  logger.info('Media Stream WebSocket connected', { conversationId, streamSid });
+  
+  let callSid = null;
+  let audioStream = null;
+  let isStreaming = false;
+  
+  // Initialize global Maps if not exists
+  global.initialMessages = global.initialMessages || new Map();
+  global.mediaStreamConnections = global.mediaStreamConnections || new Map();
+  
+  ws.on('message', async (message) => {
+    try {
+      const msg = JSON.parse(message.toString());
+      
+      if (msg.event === 'start') {
+        callSid = msg.start.callSid;
+        logger.info('Media stream started', { callSid, streamSid });
+        
+        // Check if there's an initial message to stream
+        const initialMessage = global.initialMessages?.get(conversationId);
+        if (initialMessage) {
+          global.initialMessages.delete(conversationId);
+          // Stream the initial message
+          await streamAudioToCall(initialMessage.text, {
+            voiceConfig: {
+              voiceId: initialMessage.voiceId,
+              ...initialMessage.voiceConfig
+            },
+            ttsProvider: initialMessage.ttsProvider
+          });
+        }
+      }
+      
+      if (msg.event === 'media') {
+        // We receive audio from caller here if needed for STT
+        // For now, we're only sending audio to caller
+      }
+      
+      if (msg.event === 'stop') {
+        logger.info('Media stream stopped', { callSid, streamSid });
+        if (audioStream) {
+          audioStream = null;
+        }
+      }
+    } catch (error) {
+      logger.error('Error processing media stream message', { error: error.message });
+    }
+  });
+  
+  /**
+   * Stream audio from ElevenLabs to Twilio in real-time
+   * @param {string} text - Text to speak
+   * @param {object} callData - Call configuration
+   */
+  async function streamAudioToCall(text, callData) {
+    if (isStreaming) {
+      logger.warn('Already streaming audio, ignoring new request');
+      return;
+    }
+    
+    isStreaming = true;
+    
+    try {
+      const voiceConfig = callData?.voiceConfig || {};
+      const voiceId = voiceConfig.voiceId || DEFAULT_VOICE_ID;
+      const ttsProvider = callData?.ttsProvider || 'elevenlabs';
+      
+      // Get streaming audio from ElevenLabs
+      audioStream = await voiceService.generateSpeechStreaming(
+        text, 
+        voiceId, 
+        voiceConfig,
+        ttsProvider
+      );
+      
+      // Stream audio chunks to Twilio as they arrive
+      // Note: ElevenLabs returns MP3-encoded chunks. Twilio Media Streams expect mulaw audio.
+      // For full production use, audio format conversion may be needed depending on Twilio configuration.
+      for await (const chunk of audioStream) {
+        if (ws.readyState === ws.OPEN) {
+          const payload = {
+            event: 'media',
+            streamSid: streamSid,
+            media: {
+              payload: chunk.toString('base64')
+            }
+          };
+          ws.send(JSON.stringify(payload));
+        } else {
+          logger.warn('WebSocket closed while streaming');
+          break;
+        }
+      }
+      
+      logger.info('Audio streaming completed', { callSid, streamSid });
+    } catch (error) {
+      logger.error('Error streaming audio', { error: error.message });
+    } finally {
+      isStreaming = false;
+    }
+  }
+  
+  // Expose streaming function to be called from other endpoints
+  ws.streamAudio = streamAudioToCall;
+  
+  // Store WebSocket connection by conversationId for access from other endpoints
+  if (conversationId) {
+    global.mediaStreamConnections.set(conversationId, ws);
+  }
+  
+  ws.on('close', () => {
+    logger.info('Media Stream WebSocket closed', { callSid, streamSid });
+    if (conversationId && global.mediaStreamConnections) {
+      global.mediaStreamConnections.delete(conversationId);
+    }
+  });
+  
+  ws.on('error', (error) => {
+    logger.error('Media Stream WebSocket error', { error: error.message });
+  });
+}
+
+wss.on('connection', (ws, req) => {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const pathname = url.pathname;
+  
+  // Check if this is a media stream connection
+  if (pathname === '/media-websocket') {
+    handleMediaStreamConnection(ws, req);
+    return;
+  }
+  
+  // Existing WebSocket logic for other connections
   const connectionId = uuidv4();
   logger.info('WebSocket connection established', { connectionId });
 
