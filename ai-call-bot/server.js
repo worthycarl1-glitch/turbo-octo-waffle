@@ -682,19 +682,28 @@ app.post('/make-call', async (req, res) => {
       // Connect call to ElevenLabs agent via WebSocket
       const connect = twiml.connect();
       
-      // Log URL construction details for debugging
-      logger.info('Building WebSocket stream URL', {
+      // Build WebSocket URL (without query parameters - Twilio doesn't forward them)
+      const streamUrl = `${BASE_URL.replace('https://', 'wss://').replace('http://', 'ws://')}/elevenlabs-stream`;
+      
+      logger.info('Building WebSocket stream connection', {
         baseUrl: BASE_URL,
+        streamUrl,
         agentId: effectiveAgentId,
         conversationId
       });
       
-      const streamUrl = `${BASE_URL.replace('https://', 'wss://').replace('http://', 'ws://')}/elevenlabs-stream?agentId=${encodeURIComponent(effectiveAgentId)}&conversationId=${encodeURIComponent(conversationId)}`;
-      
-      logger.info('WebSocket stream URL built', { streamUrl });
-      
-      connect.stream({
+      // Pass agentId and conversationId as stream parameters instead of URL query params
+      const stream = connect.stream({
         url: streamUrl
+      });
+      
+      // Add parameters using Twilio's <Parameter> tags
+      stream.parameter({ name: 'agentId', value: effectiveAgentId });
+      stream.parameter({ name: 'conversationId', value: conversationId });
+      
+      logger.info('WebSocket stream configured with parameters', { 
+        agentId: effectiveAgentId,
+        conversationId 
       });
 
       // Create call options
@@ -2014,20 +2023,13 @@ wss.on('connection', (ws, req) => {
 
   // Handle ElevenLabs stream connections (for agent-based calls)
   if (pathname === '/elevenlabs-stream') {
-    const agentId = url.searchParams.get('agentId');
-    const conversationId = url.searchParams.get('conversationId');
-    
-    if (!agentId) {
-      logger.error('ElevenLabs stream connection missing agentId', { connectionId });
-      ws.close(1008, 'Missing agentId parameter');
-      return;
-    }
-
-    logger.info('ElevenLabs stream connection', { connectionId, agentId, conversationId });
-
-    // Connect to ElevenLabs Conversational AI WebSocket
-    let elevenLabsWs = null;
+    // Parameters are sent in the 'start' event from Twilio, not in URL
+    let agentId = null;
+    let conversationId = null;
     let streamSid = null;
+    let elevenLabsWs = null;
+    
+    logger.info('ElevenLabs stream connection established, waiting for start event', { connectionId });
 
     ws.on('message', (message) => {
       try {
@@ -2037,11 +2039,25 @@ wss.on('connection', (ws, req) => {
           streamSid = data.start?.streamSid;
           const callSid = data.start?.callSid;
           
+          // Extract agentId and conversationId from custom parameters
+          const customParameters = data.start?.customParameters || {};
+          ({ agentId, conversationId } = customParameters);
+          
+          if (!agentId) {
+            logger.error('ElevenLabs stream connection missing agentId in start event', { 
+              connectionId, 
+              customParameters 
+            });
+            ws.close(1008, 'Missing agentId parameter');
+            return;
+          }
+          
           logger.info('Twilio media stream started, connecting to ElevenLabs', {
             connectionId,
             streamSid,
             callSid,
-            agentId
+            agentId,
+            conversationId
           });
 
           // Connect to ElevenLabs Conversational AI
