@@ -681,7 +681,18 @@ app.post('/make-call', async (req, res) => {
       
       // Connect call to ElevenLabs agent via WebSocket
       const connect = twiml.connect();
+      
+      // Log URL construction details for debugging
+      logger.info('Building WebSocket stream URL', {
+        baseUrl: BASE_URL,
+        agentId: effectiveAgentId,
+        conversationId
+      });
+      
       const streamUrl = `${BASE_URL.replace('https://', 'wss://').replace('http://', 'ws://')}/elevenlabs-stream?agentId=${encodeURIComponent(effectiveAgentId)}&conversationId=${encodeURIComponent(conversationId)}`;
+      
+      logger.info('WebSocket stream URL built', { streamUrl });
+      
       connect.stream({
         url: streamUrl
       });
