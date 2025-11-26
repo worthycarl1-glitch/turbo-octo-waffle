@@ -353,15 +353,78 @@ class ElevenLabsAgentService {
   }
 
   /**
-   * Generate WebSocket URL for connecting to an agent
-   * @param {string} agentId - The agent ID to connect to
-   * @returns {string} WebSocket URL
+   * Initiate outbound call via ElevenLabs native Twilio API
+   * @param {string} agentId - Agent ID
+   * @param {string} phoneNumberId - ElevenLabs phone number ID
+   * @param {string} toNumber - Phone number to call (E.164 format)
+   * @returns {Promise<object>} Call initiation response
    */
-  getAgentWebSocketUrl(agentId) {
-    if (!agentId) {
-      throw new Error('Agent ID is required');
+  async initiateOutboundCall(agentId, phoneNumberId, toNumber) {
+    if (!this.isConfigured()) {
+      return {
+        success: false,
+        error: 'ElevenLabs API key not configured'
+      };
     }
-    return `wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${agentId}`;
+
+    if (!agentId || !phoneNumberId || !toNumber) {
+      return {
+        success: false,
+        error: 'Missing required parameters: agentId, phoneNumberId, or toNumber'
+      };
+    }
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+      const response = await fetch('https://api.elevenlabs.io/v1/convai/twilio/outbound-call', {
+        method: 'POST',
+        headers: {
+          'xi-api-key': process.env.ELEVENLABS_API_KEY,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          agent_id: agentId,
+          agent_phone_number_id: phoneNumberId,
+          to_number: toNumber
+        }),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        return {
+          success: false,
+          error: `ElevenLabs API error: ${response.status}`,
+          details: errorData
+        };
+      }
+
+      const data = await response.json();
+      
+      return {
+        success: true,
+        conversationId: data.conversation_id,
+        callSid: data.call_sid,
+        message: data.message
+      };
+
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        return {
+          success: false,
+          error: 'ElevenLabs API request timed out'
+        };
+      }
+      
+      return {
+        success: false,
+        error: error.message
+      };
+    }
   }
 
   /**

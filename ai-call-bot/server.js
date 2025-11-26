@@ -648,7 +648,7 @@ app.post('/make-call', async (req, res) => {
 
     // ====================================================
     // NEW: ElevenLabs Conversational AI Agent Mode
-    // When agentId is provided, use agent-based architecture
+    // When agentId is provided, use ElevenLabs native Twilio API
     // ====================================================
     if (effectiveAgentId) {
       // Check ElevenLabs configuration
@@ -660,7 +660,7 @@ app.post('/make-call', async (req, res) => {
         });
       }
 
-      // Generate conversation ID
+      // Generate conversation ID for tracking
       const conversationId = `conv_${uuidv4()}`;
 
       logger.info('Agent-based call request received', {
@@ -673,93 +673,80 @@ app.post('/make-call', async (req, res) => {
         metadata
       });
 
-      // Create Twilio client
-      const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-
-      // Build TwiML for WebSocket media stream to ElevenLabs agent
-      const twiml = new twilio.twiml.VoiceResponse();
+      // Get agent phone number ID from environment
+      const agentPhoneNumberId = process.env.ELEVENLABS_PHONE_NUMBER_ID;
       
-      // Connect call to ElevenLabs agent via WebSocket
-      const connect = twiml.connect();
-      
-      // Build WebSocket URL (without query parameters - Twilio doesn't forward them)
-      const streamUrl = `${BASE_URL.replace('https://', 'wss://').replace('http://', 'ws://')}/elevenlabs-stream`;
-      
-      logger.info('Building WebSocket stream connection', {
-        baseUrl: BASE_URL,
-        streamUrl,
-        agentId: effectiveAgentId,
-        conversationId
-      });
-      
-      // Pass agentId and conversationId as stream parameters instead of URL query params
-      const stream = connect.stream({
-        url: streamUrl
-      });
-      
-      // Add parameters using Twilio's <Parameter> tags
-      stream.parameter({ name: 'agentId', value: effectiveAgentId });
-      stream.parameter({ name: 'conversationId', value: conversationId });
-      
-      logger.info('WebSocket stream configured with parameters', { 
-        agentId: effectiveAgentId,
-        conversationId 
-      });
-
-      // Create call options
-      const callOptions = {
-        twiml: twiml.toString(),
-        to: to,
-        from: process.env.TWILIO_PHONE_NUMBER
-      };
-
-      // Add recording if requested
-      if (recordCall) {
-        callOptions.record = true;
-        callOptions.recordingStatusCallback = `${BASE_URL}/recording-callback?conversationId=${encodeURIComponent(conversationId)}`;
+      if (!agentPhoneNumberId) {
+        return res.status(500).json({
+          success: false,
+          error: 'ElevenLabs phone number not configured',
+          details: 'Server is missing ELEVENLABS_PHONE_NUMBER_ID environment variable. Add your Twilio phone number to ElevenLabs dashboard and set the ID here.'
+        });
       }
 
-      // Add status callback for call tracking
-      let statusCallbackUrl = `${BASE_URL}/call-status-callback?conversationId=${encodeURIComponent(conversationId)}`;
-      if (callbackUrl) {
-        statusCallbackUrl += `&callbackUrl=${encodeURIComponent(callbackUrl)}`;
+      try {
+        // Use ElevenLabs native Twilio outbound call API
+        const result = await elevenLabsAgentService.initiateOutboundCall(
+          effectiveAgentId,
+          agentPhoneNumberId,
+          to
+        );
+
+        if (!result.success) {
+          logger.error('ElevenLabs outbound call failed', { 
+            error: result.error,
+            details: result.details
+          });
+          
+          return res.status(500).json({
+            success: false,
+            error: 'Failed to initiate call via ElevenLabs',
+            details: result.error,
+            elevenlabsError: result.details
+          });
+        }
+        
+        logger.info('ElevenLabs call initiated successfully', {
+          conversationId: result.conversationId,
+          callSid: result.callSid,
+          to
+        });
+
+        // Initialize call tracking for agent-based call
+        callTracker.initCall(result.callSid || conversationId, {
+          conversationId: result.conversationId || conversationId,
+          to,
+          agentId: effectiveAgentId,
+          agentMode: true,
+          elevenLabsManaged: true,
+          metadata,
+          maxDuration,
+          callbackUrl,
+          recordCall
+        });
+
+        // Build response
+        return res.json({
+          success: true,
+          callSid: result.callSid,
+          conversationId: result.conversationId,
+          to: to,
+          agentId: effectiveAgentId,
+          mode: 'agent',
+          provider: 'elevenlabs-native',
+          estimatedDuration: maxDuration,
+          timestamp: new Date().toISOString()
+        });
+
+      } catch (error) {
+        logger.error('Error calling ElevenLabs API', { error: error.message, stack: error.stack });
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to initiate call',
+          details: error.message,
+          timestamp: new Date().toISOString()
+        });
       }
-      callOptions.statusCallback = statusCallbackUrl;
-      callOptions.statusCallbackEvent = ['initiated', 'ringing', 'answered', 'completed'];
-
-      // Make the call
-      const call = await client.calls.create(callOptions);
-
-      // Initialize call tracking for agent-based call
-      callTracker.initCall(call.sid, {
-        conversationId,
-        to,
-        agentId: effectiveAgentId,
-        agentMode: true,
-        metadata,
-        maxDuration,
-        callbackUrl,
-        recordCall
-      });
-
-      logger.info('Agent-based call initiated', { 
-        callSid: call.sid, 
-        conversationId,
-        agentId: effectiveAgentId,
-        to 
-      });
-
-      // Build response
-      return res.json({
-        success: true,
-        callSid: call.sid,
-        to: to,
-        conversationId: conversationId,
-        agentId: effectiveAgentId,
-        mode: 'agent',
-        estimatedDuration: maxDuration,
-        timestamp: new Date().toISOString()
-      });
     }
 
     // ====================================================
@@ -2020,143 +2007,6 @@ wss.on('connection', (ws, req) => {
   const pathname = url.pathname;
   
   logger.info('WebSocket connection established', { connectionId, pathname });
-
-  // Handle ElevenLabs stream connections (for agent-based calls)
-  if (pathname === '/elevenlabs-stream') {
-    // Parameters are sent in the 'start' event from Twilio, not in URL
-    let agentId = null;
-    let conversationId = null;
-    let streamSid = null;
-    let elevenLabsWs = null;
-    
-    logger.info('ElevenLabs stream connection established, waiting for start event', { connectionId });
-
-    ws.on('message', (message) => {
-      try {
-        const data = JSON.parse(message.toString());
-        
-        if (data.event === 'start') {
-          streamSid = data.start?.streamSid;
-          const callSid = data.start?.callSid;
-          
-          // Extract agentId and conversationId from custom parameters
-          const customParameters = data.start?.customParameters || {};
-          ({ agentId, conversationId } = customParameters);
-          
-          if (!agentId) {
-            logger.error('ElevenLabs stream connection missing agentId in start event', { 
-              connectionId, 
-              customParameters 
-            });
-            ws.close(1008, 'Missing agentId parameter');
-            return;
-          }
-          
-          logger.info('Twilio media stream started, connecting to ElevenLabs', {
-            connectionId,
-            streamSid,
-            callSid,
-            agentId,
-            conversationId
-          });
-
-          // Connect to ElevenLabs Conversational AI
-          const elevenLabsUrl = elevenLabsAgentService.getAgentWebSocketUrl(agentId);
-          elevenLabsWs = new WebSocket(elevenLabsUrl, {
-            headers: {
-              'xi-api-key': process.env.ELEVENLABS_API_KEY
-            }
-          });
-
-          elevenLabsWs.on('open', () => {
-            logger.info('Connected to ElevenLabs Conversational AI', { connectionId, agentId });
-            
-            // Send initial configuration to ElevenLabs
-            elevenLabsWs.send(JSON.stringify({
-              type: 'conversation_initiation_client_data',
-              conversation_initiation_client_data: {
-                conversation_id: conversationId,
-                audio_interface: {
-                  input_audio_format: 'mulaw_8000',   // Twilio sends µ-law 8kHz
-                  output_audio_format: 'mulaw_8000'   // Twilio expects µ-law 8kHz
-                }
-              }
-            }));
-          });
-
-          elevenLabsWs.on('message', (elevenLabsMessage) => {
-            try {
-              const elevenLabsData = JSON.parse(elevenLabsMessage.toString());
-              
-              // Forward audio from ElevenLabs to Twilio
-              if (elevenLabsData.type === 'audio' && elevenLabsData.audio) {
-                if (ws.readyState === WebSocket.OPEN) {
-                  ws.send(JSON.stringify({
-                    event: 'media',
-                    streamSid: streamSid,
-                    media: {
-                      payload: elevenLabsData.audio
-                    }
-                  }));
-                }
-              } else if (elevenLabsData.type === 'agent_response') {
-                logger.info('ElevenLabs agent response', { 
-                  connectionId, 
-                  text: elevenLabsData.text?.substring(0, 100) 
-                });
-              } else if (elevenLabsData.type === 'user_transcript') {
-                logger.info('User transcript', { 
-                  connectionId, 
-                  text: elevenLabsData.text?.substring(0, 100) 
-                });
-              } else if (elevenLabsData.type === 'conversation_ended') {
-                logger.info('ElevenLabs conversation ended', { connectionId });
-              }
-            } catch (error) {
-              logger.error('Error processing ElevenLabs message', { connectionId, error: error.message });
-            }
-          });
-
-          elevenLabsWs.on('close', (code, reason) => {
-            logger.info('ElevenLabs connection closed', { connectionId, code, reason: reason?.toString() });
-          });
-
-          elevenLabsWs.on('error', (error) => {
-            logger.error('ElevenLabs WebSocket error', { connectionId, error: error.message });
-          });
-
-        } else if (data.event === 'media') {
-          // Forward audio from Twilio to ElevenLabs
-          if (elevenLabsWs && elevenLabsWs.readyState === WebSocket.OPEN) {
-            elevenLabsWs.send(JSON.stringify({
-              type: 'audio',
-              audio: data.media?.payload
-            }));
-          }
-        } else if (data.event === 'stop') {
-          logger.info('Twilio media stream stopped', { connectionId, streamSid });
-          if (elevenLabsWs) {
-            elevenLabsWs.close();
-          }
-        }
-      } catch (error) {
-        logger.error('Error processing Twilio message', { connectionId, error: error.message });
-      }
-    });
-
-    ws.on('close', () => {
-      logger.info('Twilio WebSocket closed', { connectionId });
-      if (elevenLabsWs) {
-        elevenLabsWs.close();
-      }
-    });
-
-    ws.on('error', (error) => {
-      logger.error('Twilio WebSocket error', { connectionId, error: error.message });
-    });
-
-    return;
-  }
 
   // Default WebSocket handling (for legacy connections)
   ws.on('message', (message) => {
