@@ -679,7 +679,7 @@ app.post('/make-call', async (req, res) => {
         metadata,
         hasCustomPrompt: !!customPrompt,
         hasFirstMessage: !!firstMessage,
-        hasDynamicVariables: Object.keys(dynamicVariables || {}).length > 0
+        hasDynamicVariables: dynamicVariables && Object.keys(dynamicVariables).length > 0
       });
 
       // Get agent phone number ID from environment
@@ -750,7 +750,8 @@ app.post('/make-call', async (req, res) => {
         });
 
         // Build response
-        const isCustomized = !!(customPrompt || firstMessage || Object.keys(dynamicVariables || {}).length > 0);
+        const hasDynVars = dynamicVariables && Object.keys(dynamicVariables).length > 0;
+        const isCustomized = !!(customPrompt || firstMessage || hasDynVars || overrideLanguage || overrideVoiceId);
         return res.json({
           success: true,
           callSid: result.callSid,
