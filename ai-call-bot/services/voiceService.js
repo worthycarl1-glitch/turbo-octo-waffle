@@ -412,7 +412,7 @@ class VoiceService {
    */
   async generateSpeechStreaming(text, voiceId, options = {}, ttsProvider = 'elevenlabs') {
     if (ttsProvider === 'openai') {
-      throw new Error('OpenAI TTS does not support streaming. Use elevenlabs for streaming.');
+      throw new Error('OpenAI TTS does not support streaming. Use ttsProvider="elevenlabs" for streaming, or use generateSpeech() method for file-based playback.');
     }
     
     if (!this.elevenlabsClient) {

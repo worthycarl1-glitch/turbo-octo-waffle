@@ -1205,10 +1205,14 @@ app.post('/media-stream', async (req, res) => {
   // Return TwiML that starts a Media Stream
   const twiml = new twilio.twiml.VoiceResponse();
   
+  // Construct WebSocket URL using similar logic to BASE_URL
+  const wsHost = process.env.RAILWAY_PUBLIC_DOMAIN || `localhost:${PORT}`;
+  const wsProtocol = process.env.RAILWAY_PUBLIC_DOMAIN ? 'wss' : 'ws';
+  
   const start = twiml.start();
   start.stream({
     name: `stream_${conversationId}`,
-    url: `wss://${process.env.RAILWAY_PUBLIC_DOMAIN || 'localhost:3000'}/media-websocket?conversationId=${conversationId}`
+    url: `${wsProtocol}://${wsHost}/media-websocket?conversationId=${conversationId}`
   });
   
   // Pause to keep the call alive while streaming
@@ -1952,6 +1956,10 @@ async function handleMediaStreamConnection(ws, req) {
   let audioStream = null;
   let isStreaming = false;
   
+  // Initialize global Maps if not exists
+  global.initialMessages = global.initialMessages || new Map();
+  global.mediaStreamConnections = global.mediaStreamConnections || new Map();
+  
   ws.on('message', async (message) => {
     try {
       const msg = JSON.parse(message.toString());
@@ -1965,7 +1973,6 @@ async function handleMediaStreamConnection(ws, req) {
         if (initialMessage) {
           global.initialMessages.delete(conversationId);
           // Stream the initial message
-          const callData = callSid ? callTracker.getCall(callSid) : null;
           await streamAudioToCall(initialMessage.text, {
             voiceConfig: {
               voiceId: initialMessage.voiceId,
@@ -2007,7 +2014,7 @@ async function handleMediaStreamConnection(ws, req) {
     
     try {
       const voiceConfig = callData?.voiceConfig || {};
-      const voiceId = voiceConfig.voiceId || '4tRn1lSkEn13EVTuqb0g';
+      const voiceId = voiceConfig.voiceId || DEFAULT_VOICE_ID;
       const ttsProvider = callData?.ttsProvider || 'elevenlabs';
       
       // Get streaming audio from ElevenLabs
@@ -2019,9 +2026,10 @@ async function handleMediaStreamConnection(ws, req) {
       );
       
       // Stream audio chunks to Twilio as they arrive
+      // Note: ElevenLabs returns MP3-encoded chunks. Twilio Media Streams expect mulaw audio.
+      // For full production use, audio format conversion may be needed depending on Twilio configuration.
       for await (const chunk of audioStream) {
         if (ws.readyState === ws.OPEN) {
-          // Convert chunk to base64 mulaw format for Twilio
           const payload = {
             event: 'media',
             streamSid: streamSid,
@@ -2049,7 +2057,6 @@ async function handleMediaStreamConnection(ws, req) {
   
   // Store WebSocket connection by conversationId for access from other endpoints
   if (conversationId) {
-    global.mediaStreamConnections = global.mediaStreamConnections || new Map();
     global.mediaStreamConnections.set(conversationId, ws);
   }
   
