@@ -602,7 +602,13 @@ app.post('/make-call', async (req, res) => {
       speechModel = 'phone_call',
       enhancedModel = true,
       hints = [],
-      enableResponseCache = true
+      enableResponseCache = true,
+      // Dynamic Customization (Optional - for per-call agent customization)
+      customPrompt = null,
+      firstMessage = null,
+      dynamicVariables = {},
+      overrideLanguage = null,
+      overrideVoiceId = null
     } = req.body;
 
     // === VALIDATION ===
@@ -670,7 +676,10 @@ app.post('/make-call', async (req, res) => {
         maxDuration,
         recordCall,
         hasCallbackUrl: !!callbackUrl,
-        metadata
+        metadata,
+        hasCustomPrompt: !!customPrompt,
+        hasFirstMessage: !!firstMessage,
+        hasDynamicVariables: Object.keys(dynamicVariables || {}).length > 0
       });
 
       // Get agent phone number ID from environment
@@ -685,11 +694,18 @@ app.post('/make-call', async (req, res) => {
       }
 
       try {
-        // Use ElevenLabs native Twilio outbound call API
+        // Use ElevenLabs native Twilio outbound call API with customization
         const result = await elevenLabsAgentService.initiateOutboundCall(
           effectiveAgentId,
           agentPhoneNumberId,
-          to
+          to,
+          {
+            customPrompt,
+            firstMessage,
+            dynamicVariables: dynamicVariables || {},
+            overrideLanguage,
+            overrideVoiceId
+          }
         );
 
         if (!result.success) {
@@ -734,6 +750,7 @@ app.post('/make-call', async (req, res) => {
         });
 
         // Build response
+        const isCustomized = !!(customPrompt || firstMessage || Object.keys(dynamicVariables || {}).length > 0);
         return res.json({
           success: true,
           callSid: result.callSid,
@@ -742,6 +759,7 @@ app.post('/make-call', async (req, res) => {
           agentId: effectiveAgentId,
           mode: 'agent',
           provider: 'elevenlabs-native',
+          customized: isCustomized,
           estimatedDuration: maxDuration,
           timestamp: new Date().toISOString()
         });
@@ -1806,6 +1824,43 @@ app.get('/api-docs', (req, res) => {
               default: {},
               description: 'Custom tracking data'
             }
+          },
+          dynamicCustomization: {
+            customPrompt: {
+              type: 'string',
+              default: null,
+              description: 'Override agent system prompt for this specific call. Supports variable interpolation with {{variable_name}}.',
+              example: 'You are scheduling an appointment for {{customer_name}}. Available times: {{available_times}}. Be friendly and efficient.'
+            },
+            firstMessage: {
+              type: 'string',
+              default: null,
+              description: 'Override agent first message for this specific call. Supports variable interpolation.',
+              example: 'Hi {{customer_name}}! I\'m calling to schedule your appointment.'
+            },
+            dynamicVariables: {
+              type: 'object',
+              default: {},
+              description: 'Key-value pairs of variables to inject into prompts and messages. Can be referenced using {{key}} syntax.',
+              example: {
+                customer_name: 'John Smith',
+                available_times: '2pm, 3pm, or 4pm',
+                appointment_type: 'Sales Call',
+                company_name: 'Acme Corp'
+              }
+            },
+            overrideLanguage: {
+              type: 'string',
+              default: null,
+              description: 'Override agent language for this call',
+              example: 'es'
+            },
+            overrideVoiceId: {
+              type: 'string',
+              default: null,
+              description: 'Override agent voice for this call',
+              example: '21m00Tcm4TlvDq8ikWAM'
+            }
           }
         },
         response: {
@@ -1815,6 +1870,8 @@ app.get('/api-docs', (req, res) => {
           conversationId: 'string - Unique conversation identifier',
           agentId: 'string - ElevenLabs agent ID (agent mode only)',
           mode: 'string - "agent" or "legacy"',
+          provider: 'string - "elevenlabs-native" for agent mode',
+          customized: 'boolean - Whether dynamic customization was applied (agent mode only)',
           estimatedDuration: 'integer - Max call duration in seconds',
           timestamp: 'string - ISO 8601 timestamp'
         },
@@ -1833,8 +1890,40 @@ app.get('/api-docs', (req, res) => {
               conversationId: 'conv_uuid-here',
               agentId: 'agent_abc123',
               mode: 'agent',
+              provider: 'elevenlabs-native',
+              customized: false,
               estimatedDuration: 600,
               timestamp: '2025-11-25T10:00:00.000Z'
+            }
+          },
+          dynamicCustomization: {
+            description: 'Call with dynamic prompt and variables from CRM',
+            request: {
+              to: '+14155551234',
+              agentId: 'agent_abc123',
+              customPrompt: 'You are calling {{customer_name}} to schedule a {{appointment_type}}. Available times are {{available_times}}. Confirm their preferred time and provide next steps.',
+              firstMessage: 'Hi {{customer_name}}, this is an automated call to schedule your {{appointment_type}}.',
+              dynamicVariables: {
+                customer_name: 'Sarah Johnson',
+                appointment_type: 'product demo',
+                available_times: '2pm today, 10am tomorrow, or 3pm tomorrow'
+              },
+              metadata: {
+                crm_id: 'contact_12345',
+                campaign: 'Q4_demos'
+              }
+            },
+            response: {
+              success: true,
+              callSid: 'CA1234567890abcdef',
+              to: '+14155551234',
+              conversationId: 'conv_uuid-here',
+              agentId: 'agent_abc123',
+              mode: 'agent',
+              provider: 'elevenlabs-native',
+              customized: true,
+              estimatedDuration: 600,
+              timestamp: '2025-11-26T10:00:00.000Z'
             }
           },
           legacyMode: {
