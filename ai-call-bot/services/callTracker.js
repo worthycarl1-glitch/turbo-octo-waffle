@@ -30,6 +30,15 @@ class CallTracker {
       sentiment: { overall: 'neutral', score: 0 },
       metadata: config.metadata || {},
       voiceConfig: config.voiceConfig || {},
+      // TTS Provider tracking
+      ttsProvider: config.ttsProvider || 'elevenlabs',
+      openaiVoice: config.openaiVoice || null,
+      openaiModel: config.openaiModel || null,
+      // Silence tracking for smart timeout
+      silenceCount: 0,
+      silenceEvents: [],
+      lastSpeechTime: now,
+      // Existing config
       systemPrompt: config.systemPrompt || null,
       conversationMode: config.conversationMode || 'interactive',
       maxDuration: config.maxDuration || 600,
@@ -42,7 +51,8 @@ class CallTracker {
       transferNumber: config.transferNumber || null,
       transferConditions: config.transferConditions || [],
       recording: null,
-      lastUpdated: now
+      lastUpdated: now,
+      language: config.language || 'en-US'
     });
     
     return this.activeCalls.get(callSid);
@@ -81,6 +91,40 @@ class CallTracker {
     const call = this.activeCalls.get(callSid);
     if (call && call.connectedTime) {
       call.duration = Math.floor((Date.now() - call.connectedTime.getTime()) / 1000);
+      call.lastUpdated = new Date();
+    }
+    return call;
+  }
+
+  /**
+   * Update silence event for smart timeout tracking
+   * @param {string} callSid 
+   * @param {string} eventType - 'gentle_prompt' or 'graceful_end'
+   * @param {number} silenceCount 
+   */
+  updateSilenceEvent(callSid, eventType, silenceCount) {
+    const call = this.activeCalls.get(callSid);
+    if (call) {
+      call.silenceCount = silenceCount;
+      call.silenceEvents.push({
+        type: eventType,
+        silenceCount,
+        timestamp: new Date().toISOString()
+      });
+      call.lastUpdated = new Date();
+    }
+    return call;
+  }
+
+  /**
+   * Reset silence count when user speaks
+   * @param {string} callSid 
+   */
+  resetSilenceCount(callSid) {
+    const call = this.activeCalls.get(callSid);
+    if (call) {
+      call.silenceCount = 0;
+      call.lastSpeechTime = new Date();
       call.lastUpdated = new Date();
     }
     return call;
@@ -186,7 +230,9 @@ class CallTracker {
       currentEmotion: call.currentEmotion,
       transcript: call.transcript.map(t => `${t.role}: ${t.content}`).join('\n'),
       sentiment: call.sentiment,
-      metadata: call.metadata
+      metadata: call.metadata,
+      ttsProvider: call.ttsProvider,
+      silenceEvents: call.silenceEvents
     };
   }
 
@@ -210,7 +256,9 @@ class CallTracker {
       emotions: call.emotions,
       leadQualification: call.leadQualification,
       recording: call.recording,
-      metadata: call.metadata
+      metadata: call.metadata,
+      ttsProvider: call.ttsProvider,
+      silenceEvents: call.silenceEvents
     };
   }
 
