@@ -343,9 +343,8 @@ class VoiceService {
       const generateOptions = {
         voice: voiceId,
         text: text,
-        model_id: process.env.ELEVENLABS_MODEL || 'eleven_turbo_v2',  // Use turbo for streaming
-        voice_settings: voiceSettings,
-        optimize_streaming_latency: 4  // Maximum streaming optimization
+        model_id: 'eleven_monolingual_v1',
+        voice_settings: voiceSettings
       };
 
       // Note: ElevenLabs API doesn't directly support speaking rate in the generate method
@@ -399,52 +398,6 @@ class VoiceService {
       console.error('ElevenLabs TTS stream error:', error);
       throw error;
     }
-  }
-
-  /**
-   * Generate speech with real-time streaming (for Twilio Media Streams)
-   * Returns audio stream directly without saving to disk
-   * @param {string} text - Text to convert to speech
-   * @param {string} voiceId - ElevenLabs voice ID
-   * @param {object} options - Voice options
-   * @param {string} ttsProvider - TTS provider ('elevenlabs' or 'openai')
-   * @returns {AsyncIterable} - Audio stream
-   */
-  async generateSpeechStreaming(text, voiceId, options = {}, ttsProvider = 'elevenlabs') {
-    if (ttsProvider === 'openai') {
-      throw new Error('OpenAI TTS does not support streaming. Use ttsProvider="elevenlabs" for streaming, or use generateSpeech() method for file-based playback.');
-    }
-    
-    if (!this.elevenlabsClient) {
-      throw new Error('ElevenLabs not configured. Add ELEVENLABS_API_KEY to environment variables.');
-    }
-
-    const effectiveVoiceId = voiceId || this.defaultVoiceId;
-    
-    const voiceSettings = {
-      stability: this.validateRange(options.stability, 0, 1, this.defaultSettings.stability),
-      similarity_boost: this.validateRange(options.similarityBoost, 0, 1, this.defaultSettings.similarityBoost),
-      style: this.validateRange(options.style, 0, 1, this.defaultSettings.style),
-      use_speaker_boost: true
-    };
-
-    console.log('ElevenLabs streaming configuration:', {
-      voiceId: effectiveVoiceId,
-      model: 'eleven_turbo_v2',
-      streaming: true
-    });
-
-    // Use eleven_turbo_v2 for lowest latency (~250ms)
-    const audioStream = await this.elevenlabsClient.generate({
-      voice: effectiveVoiceId,
-      text: text,
-      model_id: 'eleven_turbo_v2',  // Fastest model for streaming
-      voice_settings: voiceSettings,
-      stream: true,
-      optimize_streaming_latency: 4  // Maximum optimization (0-4, 4 = fastest)
-    });
-
-    return audioStream;
   }
 
   /**
