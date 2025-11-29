@@ -417,7 +417,7 @@ class ElevenLabsAgentService {
           configOverride.agent = {};
           
           if (customPrompt) {
-            configOverride.agent.prompt = { prompt: customPrompt };
+            configOverride.agent.prompt = customPrompt;
           }
           
           if (firstMessage) {
@@ -484,6 +484,460 @@ class ElevenLabsAgentService {
         };
       }
       
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  /**
+   * Update existing agent
+   * @param {string} agentId - Agent ID to update
+   * @param {object} updates - Fields to update (name, prompt, first_message, voice, language)
+   * @returns {Promise<object>} Updated agent details
+   */
+  async updateAgent(agentId, updates) {
+    if (!this.isConfigured()) {
+      return {
+        success: false,
+        error: 'ElevenLabs API key not configured'
+      };
+    }
+
+    if (!agentId) {
+      return {
+        success: false,
+        error: 'Agent ID is required'
+      };
+    }
+
+    try {
+      const requestBody = {};
+
+      if (updates.name) {
+        requestBody.name = updates.name;
+      }
+
+      if (updates.voiceId) {
+        requestBody.voice = { voice_id: updates.voiceId };
+      }
+
+      if (updates.systemPrompt || updates.firstMessage) {
+        requestBody.conversation_config = {};
+        if (updates.systemPrompt) {
+          requestBody.conversation_config.system_prompt = updates.systemPrompt;
+        }
+        if (updates.firstMessage) {
+          requestBody.conversation_config.first_message = updates.firstMessage;
+        }
+      }
+
+      if (updates.language) {
+        requestBody.language = updates.language;
+      }
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+      const response = await fetch(`${ELEVENLABS_API_BASE}/${agentId}`, {
+        method: 'PATCH',
+        headers: {
+          'xi-api-key': process.env.ELEVENLABS_API_KEY,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(requestBody),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const statusCode = response.status;
+        let errorMessage = `ElevenLabs API error: ${statusCode} ${response.statusText}`;
+        
+        if (statusCode === 404) {
+          errorMessage = 'Agent not found';
+        }
+
+        try {
+          const errorData = await response.json();
+          if (errorData.detail) {
+            errorMessage = errorData.detail;
+          }
+        } catch {
+          // Use default error message
+        }
+
+        return {
+          success: false,
+          error: errorMessage
+        };
+      }
+
+      const agent = await response.json();
+
+      // Clear caches since we updated an agent
+      this.clearCache();
+
+      return {
+        success: true,
+        agent: {
+          agentId: agent.agent_id,
+          name: agent.name,
+          voiceId: agent.voice?.voice_id || null,
+          voiceName: agent.voice?.name || null,
+          language: agent.language || 'en',
+          systemPrompt: agent.conversation_config?.system_prompt || null,
+          firstMessage: agent.conversation_config?.first_message || null,
+          updatedAt: new Date().toISOString()
+        },
+        updatedFields: Object.keys(updates)
+      };
+
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        return {
+          success: false,
+          error: 'ElevenLabs API request timed out'
+        };
+      }
+      
+      console.error('Error updating ElevenLabs agent', { agentId, error: error.message });
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  /**
+   * Delete agent
+   * @param {string} agentId - Agent ID to delete
+   * @returns {Promise<object>} Deletion result
+   */
+  async deleteAgent(agentId) {
+    if (!this.isConfigured()) {
+      return {
+        success: false,
+        error: 'ElevenLabs API key not configured'
+      };
+    }
+
+    if (!agentId) {
+      return {
+        success: false,
+        error: 'Agent ID is required'
+      };
+    }
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+      const response = await fetch(`${ELEVENLABS_API_BASE}/${agentId}`, {
+        method: 'DELETE',
+        headers: {
+          'xi-api-key': process.env.ELEVENLABS_API_KEY
+        },
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const statusCode = response.status;
+        let errorMessage = `ElevenLabs API error: ${statusCode} ${response.statusText}`;
+        
+        if (statusCode === 404) {
+          errorMessage = 'Agent not found';
+        }
+
+        return {
+          success: false,
+          error: errorMessage
+        };
+      }
+
+      // Clear caches since we deleted an agent
+      this.clearCache();
+
+      return {
+        success: true,
+        message: 'Agent deleted successfully',
+        agentId
+      };
+
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        return {
+          success: false,
+          error: 'ElevenLabs API request timed out'
+        };
+      }
+      
+      console.error('Error deleting ElevenLabs agent', { agentId, error: error.message });
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  /**
+   * Upload knowledge base file to agent
+   * @param {string} agentId - Agent ID
+   * @param {Buffer} fileBuffer - File content
+   * @param {string} fileName - Original filename
+   * @param {string} mimeType - File MIME type
+   * @returns {Promise<object>} Upload result
+   */
+  async uploadKnowledgeBase(agentId, fileBuffer, fileName, mimeType) {
+    if (!this.isConfigured()) {
+      return {
+        success: false,
+        error: 'ElevenLabs API key not configured'
+      };
+    }
+
+    if (!agentId) {
+      return {
+        success: false,
+        error: 'Agent ID is required'
+      };
+    }
+
+    if (!fileBuffer || !fileName) {
+      return {
+        success: false,
+        error: 'File buffer and filename are required'
+      };
+    }
+
+    try {
+      const FormData = (await import('form-data')).default;
+      const formData = new FormData();
+      formData.append('file', fileBuffer, {
+        filename: fileName,
+        contentType: mimeType || 'application/octet-stream'
+      });
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS * 2); // Longer timeout for file uploads
+
+      const response = await fetch(`${ELEVENLABS_API_BASE}/${agentId}/knowledge-base`, {
+        method: 'POST',
+        headers: {
+          'xi-api-key': process.env.ELEVENLABS_API_KEY,
+          ...formData.getHeaders()
+        },
+        body: formData,
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const statusCode = response.status;
+        let errorMessage = `ElevenLabs API error: ${statusCode} ${response.statusText}`;
+        
+        if (statusCode === 404) {
+          errorMessage = 'Agent not found';
+        } else if (statusCode === 413) {
+          errorMessage = 'File size exceeded limit';
+        }
+
+        try {
+          const errorData = await response.json();
+          if (errorData.detail) {
+            errorMessage = errorData.detail;
+          }
+        } catch {
+          // Use default error message
+        }
+
+        return {
+          success: false,
+          error: errorMessage
+        };
+      }
+
+      const data = await response.json();
+
+      return {
+        success: true,
+        file: {
+          fileId: data.id || data.file_id,
+          fileName: fileName,
+          fileSize: fileBuffer.length,
+          uploadedAt: new Date().toISOString()
+        }
+      };
+
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        return {
+          success: false,
+          error: 'ElevenLabs API request timed out'
+        };
+      }
+      
+      console.error('Error uploading knowledge base file', { agentId, fileName, error: error.message });
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  /**
+   * List knowledge base files for agent
+   * @param {string} agentId - Agent ID
+   * @returns {Promise<object>} Knowledge base files list
+   */
+  async getKnowledgeBase(agentId) {
+    if (!this.isConfigured()) {
+      return {
+        success: false,
+        error: 'ElevenLabs API key not configured'
+      };
+    }
+
+    if (!agentId) {
+      return {
+        success: false,
+        error: 'Agent ID is required'
+      };
+    }
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+      const response = await fetch(`${ELEVENLABS_API_BASE}/${agentId}/knowledge-base`, {
+        method: 'GET',
+        headers: {
+          'xi-api-key': process.env.ELEVENLABS_API_KEY
+        },
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const statusCode = response.status;
+        let errorMessage = `ElevenLabs API error: ${statusCode} ${response.statusText}`;
+        
+        if (statusCode === 404) {
+          errorMessage = 'Agent not found';
+        }
+
+        return {
+          success: false,
+          error: errorMessage,
+          files: []
+        };
+      }
+
+      const data = await response.json();
+      
+      // Format response
+      const files = (data.files || data || []).map(file => ({
+        fileId: file.id || file.file_id,
+        fileName: file.name || file.file_name,
+        fileSize: file.size || file.file_size,
+        fileType: file.type || file.mime_type,
+        uploadedAt: file.created_at || file.uploaded_at
+      }));
+
+      return {
+        success: true,
+        files,
+        count: files.length
+      };
+
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        return {
+          success: false,
+          error: 'ElevenLabs API request timed out',
+          files: []
+        };
+      }
+      
+      console.error('Error fetching knowledge base', { agentId, error: error.message });
+      return {
+        success: false,
+        error: error.message,
+        files: []
+      };
+    }
+  }
+
+  /**
+   * Delete knowledge base file
+   * @param {string} agentId - Agent ID
+   * @param {string} fileId - File ID to delete
+   * @returns {Promise<object>} Deletion result
+   */
+  async deleteKnowledgeBaseFile(agentId, fileId) {
+    if (!this.isConfigured()) {
+      return {
+        success: false,
+        error: 'ElevenLabs API key not configured'
+      };
+    }
+
+    if (!agentId || !fileId) {
+      return {
+        success: false,
+        error: 'Agent ID and File ID are required'
+      };
+    }
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+      const response = await fetch(`${ELEVENLABS_API_BASE}/${agentId}/knowledge-base/${fileId}`, {
+        method: 'DELETE',
+        headers: {
+          'xi-api-key': process.env.ELEVENLABS_API_KEY
+        },
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const statusCode = response.status;
+        let errorMessage = `ElevenLabs API error: ${statusCode} ${response.statusText}`;
+        
+        if (statusCode === 404) {
+          errorMessage = 'Agent or file not found';
+        }
+
+        return {
+          success: false,
+          error: errorMessage
+        };
+      }
+
+      return {
+        success: true,
+        message: 'Knowledge base file deleted successfully',
+        fileId
+      };
+
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        return {
+          success: false,
+          error: 'ElevenLabs API request timed out'
+        };
+      }
+      
+      console.error('Error deleting knowledge base file', { agentId, fileId, error: error.message });
       return {
         success: false,
         error: error.message

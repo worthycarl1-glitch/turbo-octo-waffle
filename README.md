@@ -23,6 +23,9 @@ Latency: ~2.5s | Cost: ~$0.22/min
 ## 📋 Key Features
 - ✅ **Sub-100ms latency** with ElevenLabs Conversational AI agents
 - ✅ **50% cost reduction** compared to legacy architecture
+- ✅ **Full Agent Management API** - Create, update, delete agents from UI
+- ✅ **Knowledge Base Management** - Upload and manage agent knowledge files
+- ✅ **Template Cloning** - Clone agents for per-client customization
 - ✅ Real-time call status monitoring
 - ✅ Webhook callbacks on call completion
 - ✅ Call recording support
@@ -30,6 +33,22 @@ Latency: ~2.5s | Cost: ~$0.22/min
 - ✅ Backward compatible with legacy voice-based mode
 
 ## 🔌 API Endpoints
+
+### Agent Management API (NEW)
+
+Complete RESTful API for managing ElevenLabs agents. See [API_DOCUMENTATION.md](./API_DOCUMENTATION.md) for full details.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/agents` | List all agents |
+| POST | `/api/agents` | Create new agent |
+| GET | `/api/agents/:id` | Get single agent |
+| PUT | `/api/agents/:id` | Update agent |
+| DELETE | `/api/agents/:id` | Delete agent |
+| POST | `/api/agents/:id/knowledge-base` | Upload KB file |
+| GET | `/api/agents/:id/knowledge-base` | List KB files |
+| DELETE | `/api/agents/:id/knowledge-base/:fileId` | Delete KB file |
+| POST | `/api/agents/:id/clone` | Clone agent as template |
 
 ### 1. GET /agents (NEW - Recommended)
 Fetch available ElevenLabs Conversational AI agents.
@@ -235,7 +254,7 @@ turbo-octo-waffle/
 ├── ai-call-bot/
 │   ├── server.js                        # Main Express server
 │   ├── services/
-│   │   ├── elevenLabsAgentService.js    # ElevenLabs Conversational AI (NEW)
+│   │   ├── elevenLabsAgentService.js    # ElevenLabs Conversational AI (agent management)
 │   │   ├── voiceService.js              # Legacy TTS integration (deprecated)
 │   │   ├── conversationManager.js       # Legacy OpenAI logic (deprecated)
 │   │   ├── callTracker.js               # Active call monitoring
@@ -243,6 +262,8 @@ turbo-octo-waffle/
 │   └── logs/                            # Server logs
 ├── public/
 │   └── dashboard/                       # Optional dashboard UI
+├── API_DOCUMENTATION.md                 # Full API documentation for agent management
+├── DATABASE_SCHEMA.md                   # Database schema for local agent storage
 └── README.md
 ```
 
