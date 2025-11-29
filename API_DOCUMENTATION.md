@@ -357,7 +357,7 @@ curl -X POST \
 }
 ```
 
-**507 Insufficient Storage**
+**413 Payload Too Large**
 ```json
 {
   "success": false,
@@ -527,8 +527,8 @@ Content-Type: application/json
 | 400 | Bad Request | Invalid or missing required parameters |
 | 404 | Not Found | Agent or file not found |
 | 409 | Conflict | Duplicate agent name (not currently enforced) |
+| 413 | Payload Too Large | File size exceeded limit |
 | 500 | Internal Server Error | Server or ElevenLabs API error |
-| 507 | Insufficient Storage | File size exceeded limit |
 
 ---
 

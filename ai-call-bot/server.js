@@ -18,10 +18,11 @@ const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 const NODE_ENV = process.env.NODE_ENV || 'development';
 
-// File upload middleware configuration
+// File upload configuration
+const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB limit
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
+  limits: { fileSize: MAX_FILE_SIZE_BYTES }
 });
 
 const startTime = Date.now();
@@ -1578,7 +1579,7 @@ app.post('/api/agents/:id/knowledge-base', upload.single('file'), async (req, re
       if (result.error === 'Agent not found') {
         statusCode = 404;
       } else if (result.error === 'File size exceeded limit') {
-        statusCode = 507;
+        statusCode = 413; // Payload Too Large
       }
       return res.status(statusCode).json({
         success: false,
@@ -1750,8 +1751,8 @@ app.post('/api/agents/:id/clone', async (req, res) => {
     let knowledgeBaseCopied = false;
     if (copyKnowledgeBase) {
       // Note: Full KB copy would require downloading and re-uploading files
-      // For now, we indicate that manual KB copy may be needed
-      logger.info('Knowledge base copy requested - manual copy may be required', {
+      // ElevenLabs API does not support direct file copy between agents
+      logger.info('Knowledge base copy requested - not yet implemented', {
         sourceAgentId: id,
         newAgentId: newAgentResult.agent.agentId
       });
@@ -1771,8 +1772,9 @@ app.post('/api/agents/:id/clone', async (req, res) => {
         templateParentId: id
       },
       knowledgeBaseCopied,
-      note: copyKnowledgeBase && !knowledgeBaseCopied 
-        ? 'Knowledge base files need to be manually copied' 
+      knowledgeBaseCopySupported: false,
+      note: copyKnowledgeBase 
+        ? 'Knowledge base file copying is not yet implemented. Please manually upload files to the new agent.' 
         : undefined
     });
   } catch (error) {

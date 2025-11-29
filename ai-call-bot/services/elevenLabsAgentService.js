@@ -3,9 +3,12 @@
  * Manages ElevenLabs Conversational AI agents for end-to-end voice agent functionality
  */
 
+const FormData = require('form-data');
+
 const ELEVENLABS_API_BASE = 'https://api.elevenlabs.io/v1/convai/agents';
 const AGENTS_CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 const REQUEST_TIMEOUT_MS = 30000; // 30 seconds
+const FILE_UPLOAD_TIMEOUT_MS = REQUEST_TIMEOUT_MS * 2; // 60 seconds for file uploads
 
 class ElevenLabsAgentService {
   constructor() {
@@ -715,7 +718,6 @@ class ElevenLabsAgentService {
     }
 
     try {
-      const FormData = (await import('form-data')).default;
       const formData = new FormData();
       formData.append('file', fileBuffer, {
         filename: fileName,
@@ -723,7 +725,7 @@ class ElevenLabsAgentService {
       });
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS * 2); // Longer timeout for file uploads
+      const timeoutId = setTimeout(() => controller.abort(), FILE_UPLOAD_TIMEOUT_MS);
 
       const response = await fetch(`${ELEVENLABS_API_BASE}/${agentId}/knowledge-base`, {
         method: 'POST',
