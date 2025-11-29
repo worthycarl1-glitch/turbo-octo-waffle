@@ -7,6 +7,7 @@ const winston = require('winston');
 const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
 const path = require('path');
+const multer = require('multer');
 const conversationManager = require('./services/conversationManager');
 const voiceService = require('./services/voiceService');
 const callTracker = require('./services/callTracker');
@@ -16,6 +17,13 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 const NODE_ENV = process.env.NODE_ENV || 'development';
+
+// File upload configuration
+const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB limit
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_FILE_SIZE_BYTES }
+});
 
 const startTime = Date.now();
 
@@ -1272,6 +1280,508 @@ app.get('/agents', async (req, res) => {
       error: error.message,
       agents: [],
       timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * GET /api/agents - List all agents (alias for /agents with additional features)
+ * Returns formatted agent data with metadata for Base44 integration
+ */
+app.get('/api/agents', async (req, res) => {
+  const startFetchTime = Date.now();
+  
+  try {
+    if (!elevenLabsAgentService.isConfigured()) {
+      return res.status(500).json({
+        success: false,
+        error: 'ElevenLabs API key not configured',
+        agents: [],
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    const result = await elevenLabsAgentService.getAgents();
+    
+    const responseTime = Date.now() - startFetchTime;
+    logger.info('/api/agents endpoint response', { 
+      success: result.success,
+      count: result.agents?.length || 0,
+      responseTime 
+    });
+
+    res.json(result);
+  } catch (error) {
+    const responseTime = Date.now() - startFetchTime;
+    logger.error('Error fetching agents', { 
+      error: error.message, 
+      responseTime 
+    });
+    
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      agents: [],
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * POST /api/agents - Create new agent in ElevenLabs
+ * Creates agent and returns full configuration
+ */
+app.post('/api/agents', async (req, res) => {
+  try {
+    const { 
+      name, 
+      description, 
+      systemPrompt, 
+      firstMessage, 
+      voiceId, 
+      language,
+      isTemplate
+    } = req.body;
+
+    // Validation
+    if (!name) {
+      return res.status(400).json({
+        success: false,
+        error: 'Agent name is required'
+      });
+    }
+
+    if (!elevenLabsAgentService.isConfigured()) {
+      return res.status(500).json({
+        success: false,
+        error: 'ElevenLabs API key not configured'
+      });
+    }
+
+    const result = await elevenLabsAgentService.createAgent({
+      name,
+      systemPrompt,
+      firstMessage,
+      voiceId,
+      language: language || 'en'
+    });
+
+    if (!result.success) {
+      return res.status(500).json({
+        success: false,
+        error: result.error
+      });
+    }
+
+    logger.info('Agent created successfully', { 
+      agentId: result.agent.agentId,
+      name: result.agent.name
+    });
+
+    res.status(201).json({
+      success: true,
+      agent: {
+        ...result.agent,
+        description: description || '',
+        isTemplate: isTemplate || false
+      }
+    });
+  } catch (error) {
+    logger.error('Error creating agent', { error: error.message });
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/agents/:id - Get single agent configuration
+ */
+app.get('/api/agents/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        error: 'Agent ID is required'
+      });
+    }
+
+    if (!elevenLabsAgentService.isConfigured()) {
+      return res.status(500).json({
+        success: false,
+        error: 'ElevenLabs API key not configured'
+      });
+    }
+
+    const result = await elevenLabsAgentService.getAgent(id);
+
+    if (!result.success) {
+      const statusCode = result.error === 'Agent not found' ? 404 : 500;
+      return res.status(statusCode).json({
+        success: false,
+        error: result.error
+      });
+    }
+
+    res.json(result);
+  } catch (error) {
+    logger.error('Error fetching agent', { error: error.message });
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * PUT /api/agents/:id - Update agent in ElevenLabs
+ */
+app.put('/api/agents/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updates = req.body;
+
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        error: 'Agent ID is required'
+      });
+    }
+
+    // Check if any valid updates provided
+    const validFields = ['name', 'systemPrompt', 'firstMessage', 'voiceId', 'language'];
+    const providedFields = Object.keys(updates).filter(key => validFields.includes(key));
+    
+    if (providedFields.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'No valid update fields provided',
+        validFields
+      });
+    }
+
+    if (!elevenLabsAgentService.isConfigured()) {
+      return res.status(500).json({
+        success: false,
+        error: 'ElevenLabs API key not configured'
+      });
+    }
+
+    const result = await elevenLabsAgentService.updateAgent(id, updates);
+
+    if (!result.success) {
+      const statusCode = result.error === 'Agent not found' ? 404 : 500;
+      return res.status(statusCode).json({
+        success: false,
+        error: result.error
+      });
+    }
+
+    logger.info('Agent updated successfully', { 
+      agentId: id,
+      updatedFields: result.updatedFields
+    });
+
+    res.json(result);
+  } catch (error) {
+    logger.error('Error updating agent', { error: error.message });
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * DELETE /api/agents/:id - Delete agent from ElevenLabs
+ */
+app.delete('/api/agents/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        error: 'Agent ID is required'
+      });
+    }
+
+    if (!elevenLabsAgentService.isConfigured()) {
+      return res.status(500).json({
+        success: false,
+        error: 'ElevenLabs API key not configured'
+      });
+    }
+
+    const result = await elevenLabsAgentService.deleteAgent(id);
+
+    if (!result.success) {
+      const statusCode = result.error === 'Agent not found' ? 404 : 500;
+      return res.status(statusCode).json({
+        success: false,
+        error: result.error
+      });
+    }
+
+    logger.info('Agent deleted successfully', { agentId: id });
+
+    res.json(result);
+  } catch (error) {
+    logger.error('Error deleting agent', { error: error.message });
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/agents/:id/knowledge-base - Upload knowledge base files to agent
+ */
+app.post('/api/agents/:id/knowledge-base', upload.single('file'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const file = req.file;
+
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        error: 'Agent ID is required'
+      });
+    }
+
+    if (!file) {
+      return res.status(400).json({
+        success: false,
+        error: 'File is required'
+      });
+    }
+
+    if (!elevenLabsAgentService.isConfigured()) {
+      return res.status(500).json({
+        success: false,
+        error: 'ElevenLabs API key not configured'
+      });
+    }
+
+    const result = await elevenLabsAgentService.uploadKnowledgeBase(
+      id,
+      file.buffer,
+      file.originalname,
+      file.mimetype
+    );
+
+    if (!result.success) {
+      let statusCode = 500;
+      if (result.error === 'Agent not found') {
+        statusCode = 404;
+      } else if (result.error === 'File size exceeded limit') {
+        statusCode = 413; // Payload Too Large
+      }
+      return res.status(statusCode).json({
+        success: false,
+        error: result.error
+      });
+    }
+
+    logger.info('Knowledge base file uploaded', { 
+      agentId: id,
+      fileName: file.originalname,
+      fileSize: file.size
+    });
+
+    res.status(201).json(result);
+  } catch (error) {
+    logger.error('Error uploading knowledge base file', { error: error.message });
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/agents/:id/knowledge-base - List knowledge base files for agent
+ */
+app.get('/api/agents/:id/knowledge-base', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        error: 'Agent ID is required'
+      });
+    }
+
+    if (!elevenLabsAgentService.isConfigured()) {
+      return res.status(500).json({
+        success: false,
+        error: 'ElevenLabs API key not configured'
+      });
+    }
+
+    const result = await elevenLabsAgentService.getKnowledgeBase(id);
+
+    if (!result.success) {
+      const statusCode = result.error === 'Agent not found' ? 404 : 500;
+      return res.status(statusCode).json({
+        success: false,
+        error: result.error,
+        files: []
+      });
+    }
+
+    res.json(result);
+  } catch (error) {
+    logger.error('Error fetching knowledge base', { error: error.message });
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      files: []
+    });
+  }
+});
+
+/**
+ * DELETE /api/agents/:id/knowledge-base/:fileId - Delete specific knowledge base file
+ */
+app.delete('/api/agents/:id/knowledge-base/:fileId', async (req, res) => {
+  try {
+    const { id, fileId } = req.params;
+
+    if (!id || !fileId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Agent ID and File ID are required'
+      });
+    }
+
+    if (!elevenLabsAgentService.isConfigured()) {
+      return res.status(500).json({
+        success: false,
+        error: 'ElevenLabs API key not configured'
+      });
+    }
+
+    const result = await elevenLabsAgentService.deleteKnowledgeBaseFile(id, fileId);
+
+    if (!result.success) {
+      const statusCode = result.error === 'Agent or file not found' ? 404 : 500;
+      return res.status(statusCode).json({
+        success: false,
+        error: result.error
+      });
+    }
+
+    logger.info('Knowledge base file deleted', { agentId: id, fileId });
+
+    res.json(result);
+  } catch (error) {
+    logger.error('Error deleting knowledge base file', { error: error.message });
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/agents/:id/clone - Clone agent as template for new client
+ */
+app.post('/api/agents/:id/clone', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { newName, copyKnowledgeBase, customizations } = req.body;
+
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        error: 'Agent ID is required'
+      });
+    }
+
+    if (!newName) {
+      return res.status(400).json({
+        success: false,
+        error: 'New agent name is required'
+      });
+    }
+
+    if (!elevenLabsAgentService.isConfigured()) {
+      return res.status(500).json({
+        success: false,
+        error: 'ElevenLabs API key not configured'
+      });
+    }
+
+    // First, get the source agent's configuration
+    const sourceAgent = await elevenLabsAgentService.getAgent(id);
+    
+    if (!sourceAgent.success) {
+      const statusCode = sourceAgent.error === 'Agent not found' ? 404 : 500;
+      return res.status(statusCode).json({
+        success: false,
+        error: sourceAgent.error
+      });
+    }
+
+    // Create new agent with source config and customizations
+    const newAgentConfig = {
+      name: newName,
+      systemPrompt: customizations?.systemPrompt || sourceAgent.agent.systemPrompt,
+      firstMessage: customizations?.firstMessage || sourceAgent.agent.firstMessage,
+      voiceId: customizations?.voiceId || sourceAgent.agent.voiceId,
+      language: customizations?.language || sourceAgent.agent.language
+    };
+
+    const newAgentResult = await elevenLabsAgentService.createAgent(newAgentConfig);
+
+    if (!newAgentResult.success) {
+      return res.status(500).json({
+        success: false,
+        error: newAgentResult.error
+      });
+    }
+
+    // Optionally copy knowledge base files
+    let knowledgeBaseCopied = false;
+    if (copyKnowledgeBase) {
+      // Note: Full KB copy would require downloading and re-uploading files
+      // ElevenLabs API does not support direct file copy between agents
+      logger.info('Knowledge base copy requested - not yet implemented', {
+        sourceAgentId: id,
+        newAgentId: newAgentResult.agent.agentId
+      });
+      knowledgeBaseCopied = false;
+    }
+
+    logger.info('Agent cloned successfully', { 
+      sourceAgentId: id,
+      newAgentId: newAgentResult.agent.agentId,
+      newName
+    });
+
+    res.status(201).json({
+      success: true,
+      newAgent: {
+        ...newAgentResult.agent,
+        templateParentId: id
+      },
+      knowledgeBaseCopied,
+      knowledgeBaseCopySupported: false,
+      note: copyKnowledgeBase 
+        ? 'Knowledge base file copying is not yet implemented. Please manually upload files to the new agent.' 
+        : undefined
+    });
+  } catch (error) {
+    logger.error('Error cloning agent', { error: error.message });
+    res.status(500).json({
+      success: false,
+      error: error.message
     });
   }
 });
