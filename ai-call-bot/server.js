@@ -1233,12 +1233,19 @@ app.get('/twiml-stream', (req, res) => {
     if (unsafe === null || unsafe === undefined) {
       return '';
     }
-    return String(unsafe)
+    const result = String(unsafe)
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&apos;');
+    
+    // Verify escaping worked
+    if (unsafe.includes('"') && !result.includes('&quot;')) {
+      logger.error('CRITICAL: escapeXml failed to escape quotes!', { unsafe, result });
+    }
+    
+    return result;
   };
 
   // Build parameters XML dynamically (no longer need xi-api-key here - it's in the URL)
@@ -1247,7 +1254,34 @@ app.get('/twiml-stream', (req, res) => {
   if (!skipClientData) {
     // Serialize and XML-encode the client data for XML
     const clientDataJson = JSON.stringify(clientData);
-    const clientDataEncoded = escapeXml(clientDataJson);
+    
+    // DEBUG: Log before escaping
+    logger.info('Before XML escape:', { clientDataJson });
+    
+    // Primary method: use escapeXml
+    let clientDataEncoded = escapeXml(clientDataJson);
+    
+    // DEBUG: Log after escaping
+    logger.info('After XML escape:', { clientDataEncoded });
+    
+    // FALLBACK: If escapeXml failed, manually escape quotes
+    if (clientDataEncoded.includes('"') && !clientDataEncoded.includes('&quot;')) {
+      logger.warn('escapeXml failed, using manual escape as fallback');
+      clientDataEncoded = clientDataJson
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
+    }
+    
+    // FINAL VERIFICATION
+    logger.info('Final clientDataEncoded:', { 
+      clientDataEncoded,
+      hasRawQuotes: clientDataEncoded.includes('"'),
+      hasEscapedQuotes: clientDataEncoded.includes('&quot;')
+    });
+    
     parametersXml = `<Parameter name="conversation_initiation_client_data" value="${clientDataEncoded}" />`;
   }
 
@@ -1283,9 +1317,55 @@ app.get('/twiml-stream', (req, res) => {
 
   // Note: TwiML content is NOT logged to avoid exposing API key in logs
 
+  // DEBUG: Log what was actually sent
+  logger.info('TwiML sent to Twilio:', { 
+    twimlLength: twiml.length,
+    containsRawQuotes: twiml.includes('value="{"'),
+    containsEscapedQuotes: twiml.includes('&quot;'),
+    firstParameter: twiml.match(/<Parameter[^>]+>/)?.[0]
+  });
+
   // Set correct content type and send
-  res.set('Content-Type', 'text/xml');
+  res.set('Content-Type', 'text/xml; charset=utf-8');
   res.send(twiml);
+});
+
+// Test endpoint to verify XML escaping
+app.get('/test-xml-escape', (req, res) => {
+  // Helper function to escape XML (same as in /twiml-stream)
+  const escapeXml = (unsafe) => {
+    if (unsafe === null || unsafe === undefined) {
+      return '';
+    }
+    const result = String(unsafe)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;');
+    
+    // Verify escaping worked
+    if (unsafe.includes('"') && !result.includes('&quot;')) {
+      logger.error('CRITICAL: escapeXml failed to escape quotes!', { unsafe, result });
+    }
+    
+    return result;
+  };
+
+  const testJson = JSON.stringify({ conversation_id: "test123" });
+  const escaped = escapeXml(testJson);
+  
+  const response = {
+    original: testJson,
+    escaped: escaped,
+    hasRawQuotes: escaped.includes('"'),
+    hasEscapedQuotes: escaped.includes('&quot;'),
+    escapeWorking: escaped.includes('&quot;') && !escaped.includes('"')
+  };
+  
+  logger.info('Test XML escape endpoint called', response);
+  
+  res.json(response);
 });
 
 /**
