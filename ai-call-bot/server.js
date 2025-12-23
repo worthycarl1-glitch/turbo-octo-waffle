@@ -2820,8 +2820,9 @@ const server = app.listen(PORT, HOST, () => {
   if (process.env.ELEVENLABS_API_KEY) {
     console.log('✅ API Key: SET');
     console.log(`   Length: ${process.env.ELEVENLABS_API_KEY.length} chars`);
-    console.log(`   Prefix: ${process.env.ELEVENLABS_API_KEY.substring(0, 10)}...`);
-    console.log(`   Suffix: ...${process.env.ELEVENLABS_API_KEY.slice(-6)}`);
+    // Only show first 7 and last 4 characters for security
+    console.log(`   Prefix: ${process.env.ELEVENLABS_API_KEY.substring(0, 7)}...`);
+    console.log(`   Suffix: ...${process.env.ELEVENLABS_API_KEY.slice(-4)}`);
   } else {
     console.log('❌ API Key: NOT SET');
   }
