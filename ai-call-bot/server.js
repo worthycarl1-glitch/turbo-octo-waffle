@@ -31,14 +31,15 @@ const startTime = Date.now();
 const callDataStore = new Map();
 
 // Cleanup old call data every hour
+const CLEANUP_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 setInterval(() => {
-  const oneHourAgo = Date.now() - (60 * 60 * 1000);
+  const oneHourAgo = Date.now() - CLEANUP_INTERVAL_MS;
   for (const [callSid, data] of callDataStore.entries()) {
     if (new Date(data.startTime).getTime() < oneHourAgo) {
       callDataStore.delete(callSid);
     }
   }
-}, 60 * 60 * 1000);
+}, CLEANUP_INTERVAL_MS);
 
 // Voice cache for /voices endpoint
 let voicesCache = null;
@@ -1146,7 +1147,7 @@ app.get('/twiml-stream', (req, res) => {
     return res.status(400).send('Missing required parameters');
   }
 
-  // Validate agentId format (alphanumeric and underscores only)
+  // Validate agentId format (alphanumeric, underscores, and hyphens only)
   if (!/^[a-zA-Z0-9_-]+$/.test(agentId)) {
     logger.error('Invalid agentId format', { agentId });
     return res.status(400).send('Invalid agentId format');
@@ -1180,7 +1181,10 @@ app.get('/twiml-stream', (req, res) => {
     try {
       parsedDynamicVariables = JSON.parse(dynamicVariables);
     } catch (e) {
-      logger.warn('Failed to parse dynamic variables', { error: e.message });
+      logger.warn('Failed to parse dynamic variables', { 
+        error: e.message,
+        originalValue: dynamicVariables 
+      });
     }
   }
 
@@ -1213,6 +1217,9 @@ app.get('/twiml-stream', (req, res) => {
   }
 
   // Generate TwiML XML with properly escaped values
+  // Note: API key is passed as a Stream parameter, which is the standard method for
+  // Twilio Media Streams authentication. The key is transmitted over HTTPS to Twilio,
+  // then used to authenticate the WebSocket connection to ElevenLabs.
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
