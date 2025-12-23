@@ -1175,11 +1175,13 @@ app.get('/twiml-stream', (req, res) => {
   if (dynamicVariables) {
     try {
       parsedDynamicVariables = JSON.parse(dynamicVariables);
-      logger.info('✅ Parsed dynamic variables', { variables: parsedDynamicVariables });
+      logger.info('✅ Parsed dynamic variables', { 
+        count: Object.keys(parsedDynamicVariables).length,
+        keys: Object.keys(parsedDynamicVariables)
+      });
     } catch (e) {
       logger.warn('⚠️ Failed to parse dynamic variables', { 
-        error: e.message,
-        rawValue: dynamicVariables 
+        error: e.message
       });
     }
   }
@@ -1216,10 +1218,12 @@ app.get('/twiml-stream', (req, res) => {
   }
 
   logger.info('📦 Client data prepared', { 
-    clientData,
     hasConversationId: !!clientData.conversation_id,
     hasDynamicVariables: !!clientData.dynamic_variables,
-    hasConfigOverride: !!clientData.conversation_config_override
+    dynamicVariableCount: clientData.dynamic_variables ? Object.keys(clientData.dynamic_variables).length : 0,
+    hasConfigOverride: !!clientData.conversation_config_override,
+    hasCustomPrompt: !!(clientData.conversation_config_override?.agent?.prompt),
+    hasFirstMessage: !!(clientData.conversation_config_override?.agent?.first_message)
   });
 
   // Helper function to escape XML attribute values
@@ -1235,7 +1239,7 @@ app.get('/twiml-stream', (req, res) => {
       .replace(/'/g, '&apos;');
   };
 
-  // Serialize and HTML-encode the client data for XML
+  // Serialize and XML-encode the client data for XML
   const clientDataJson = JSON.stringify(clientData);
   const clientDataEncoded = escapeXml(clientDataJson);
 
