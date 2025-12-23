@@ -1155,11 +1155,17 @@ app.get('/twiml-stream', (req, res) => {
     return res.status(500).send('Server configuration error: Missing API key');
   }
 
-  // Log API key info (first 10 chars for security)
-  logger.info('🔑 API Key check', {
-    keyPrefix: process.env.ELEVENLABS_API_KEY.substring(0, 10),
-    keyLength: process.env.ELEVENLABS_API_KEY.length
-  });
+  // Log API key info (first 10 chars for security) - only in debug mode
+  if (process.env.LOG_LEVEL === 'debug') {
+    logger.debug('🔑 API Key check', {
+      keyPrefix: process.env.ELEVENLABS_API_KEY.substring(0, 10),
+      keyLength: process.env.ELEVENLABS_API_KEY.length
+    });
+  } else {
+    logger.info('🔑 API Key configured', {
+      keyLength: process.env.ELEVENLABS_API_KEY.length
+    });
+  }
 
   // Build ElevenLabs WebSocket URL with properly encoded agentId
   const wsUrl = `wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${encodeURIComponent(agentId)}`;
@@ -1237,7 +1243,7 @@ app.get('/twiml-stream', (req, res) => {
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <Stream url="${wsUrl}">
+    <Stream url="${escapeXml(wsUrl)}">
       <Parameter name="xi-api-key" value="${escapeXml(process.env.ELEVENLABS_API_KEY)}" />
       <Parameter name="conversation_initiation_client_data" value="${clientDataEncoded}" />
     </Stream>
@@ -1252,8 +1258,7 @@ app.get('/twiml-stream', (req, res) => {
     twimlLength: twiml.length
   });
 
-  // Log the actual TwiML content for debugging (at debug level)
-  logger.debug('📄 TwiML content:', { twiml });
+  // Note: TwiML content is NOT logged to avoid exposing API key in logs
 
   // Set correct content type and send
   res.set('Content-Type', 'text/xml');
