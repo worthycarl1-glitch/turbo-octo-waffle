@@ -1161,8 +1161,8 @@ app.get('/twiml-stream', (req, res) => {
     keyLength: process.env.ELEVENLABS_API_KEY.length
   });
 
-  // Build ElevenLabs WebSocket URL
-  const wsUrl = `wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${agentId}`;
+  // Build ElevenLabs WebSocket URL with properly encoded agentId
+  const wsUrl = `wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${encodeURIComponent(agentId)}`;
 
   // Parse dynamic variables if provided
   let parsedDynamicVariables = {};
@@ -1216,21 +1216,29 @@ app.get('/twiml-stream', (req, res) => {
     hasConfigOverride: !!clientData.conversation_config_override
   });
 
+  // Helper function to escape XML attribute values
+  const escapeXml = (unsafe) => {
+    if (unsafe === null || unsafe === undefined) {
+      return '';
+    }
+    return String(unsafe)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;');
+  };
+
   // Serialize and HTML-encode the client data for XML
   const clientDataJson = JSON.stringify(clientData);
-  const clientDataEncoded = clientDataJson
-    .replace(/&/g, '&amp;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+  const clientDataEncoded = escapeXml(clientDataJson);
 
   // Generate TwiML XML with CORRECT parameter name: xi-api-key
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
     <Stream url="${wsUrl}">
-      <Parameter name="xi-api-key" value="${process.env.ELEVENLABS_API_KEY}" />
+      <Parameter name="xi-api-key" value="${escapeXml(process.env.ELEVENLABS_API_KEY)}" />
       <Parameter name="conversation_initiation_client_data" value="${clientDataEncoded}" />
     </Stream>
   </Connect>
