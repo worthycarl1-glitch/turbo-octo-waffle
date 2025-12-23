@@ -1146,8 +1146,33 @@ app.get('/twiml-stream', (req, res) => {
     return res.status(400).send('Missing required parameters');
   }
 
-  // Build ElevenLabs WebSocket URL
-  const wsUrl = `wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${agentId}`;
+  // Validate agentId format (alphanumeric and underscores only)
+  if (!/^[a-zA-Z0-9_-]+$/.test(agentId)) {
+    logger.error('Invalid agentId format', { agentId });
+    return res.status(400).send('Invalid agentId format');
+  }
+
+  // Helper function to escape XML attribute values
+  const escapeXml = (unsafe) => {
+    if (unsafe === null || unsafe === undefined) {
+      return '';
+    }
+    return String(unsafe)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;');
+  };
+
+  // Validate API key exists
+  if (!process.env.ELEVENLABS_API_KEY) {
+    logger.error('ELEVENLABS_API_KEY not configured');
+    return res.status(500).send('Server configuration error');
+  }
+
+  // Build ElevenLabs WebSocket URL with properly encoded agentId
+  const wsUrl = `wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${encodeURIComponent(agentId)}`;
 
   // Parse dynamic variables if provided
   let parsedDynamicVariables = {};
@@ -1187,21 +1212,11 @@ app.get('/twiml-stream', (req, res) => {
     }
   }
 
-  // Helper function to escape XML attribute values
-  const escapeXml = (unsafe) => {
-    return unsafe
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&apos;');
-  };
-
-  // Generate TwiML XML
+  // Generate TwiML XML with properly escaped values
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <Stream url="${wsUrl}">
+    <Stream url="${escapeXml(wsUrl)}">
       <Parameter name="authorization" value="${escapeXml(process.env.ELEVENLABS_API_KEY)}"/>
       <Parameter name="conversation_config_override" value="${escapeXml(JSON.stringify(conversationData))}"/>
     </Stream>
