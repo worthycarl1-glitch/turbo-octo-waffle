@@ -1131,7 +1131,8 @@ app.get('/twiml-stream', (req, res) => {
     conversationId, 
     dynamicVariables,
     customPrompt,
-    firstMessage 
+    firstMessage,
+    skipClientData  // Optional test mode to skip conversation_initiation_client_data
   } = req.query;
 
   logger.info('TwiML stream requested', { 
@@ -1140,6 +1141,7 @@ app.get('/twiml-stream', (req, res) => {
     hasDynamicVariables: !!dynamicVariables,
     hasCustomPrompt: !!customPrompt,
     hasFirstMessage: !!firstMessage,
+    skipClientData: !!skipClientData,
     paramCount: Object.keys(req.query).length
   });
 
@@ -1237,17 +1239,22 @@ app.get('/twiml-stream', (req, res) => {
       .replace(/'/g, '&apos;');
   };
 
-  // Serialize and XML-encode the client data for XML
-  const clientDataJson = JSON.stringify(clientData);
-  const clientDataEncoded = escapeXml(clientDataJson);
+  // Build parameters XML dynamically
+  let parametersXml = `<Parameter name="xi-api-key" value="${escapeXml(process.env.ELEVENLABS_API_KEY)}" />`;
+  
+  if (!skipClientData) {
+    // Serialize and XML-encode the client data for XML
+    const clientDataJson = JSON.stringify(clientData);
+    const clientDataEncoded = escapeXml(clientDataJson);
+    parametersXml += `\n      <Parameter name="conversation_initiation_client_data" value="${clientDataEncoded}" />`;
+  }
 
   // Generate TwiML XML with CORRECT parameter name: xi-api-key
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
     <Stream url="${escapeXml(wsUrl)}">
-      <Parameter name="xi-api-key" value="${escapeXml(process.env.ELEVENLABS_API_KEY)}" />
-      <Parameter name="conversation_initiation_client_data" value="${clientDataEncoded}" />
+      ${parametersXml}
     </Stream>
   </Connect>
 </Response>`;
@@ -1255,8 +1262,8 @@ app.get('/twiml-stream', (req, res) => {
   logger.info('✅ Sending TwiML to Twilio', { 
     wsUrl,
     hasApiKey: !!process.env.ELEVENLABS_API_KEY,
-    clientDataSize: Object.keys(clientData).length,
-    clientDataJsonLength: clientDataJson.length,
+    skipClientData: !!skipClientData,
+    clientDataSize: skipClientData ? 0 : Object.keys(clientData).length,
     twimlLength: twiml.length
   });
 
@@ -2806,6 +2813,24 @@ const server = app.listen(PORT, HOST, () => {
   console.log(`API Docs: http://${HOST}:${PORT}/api-docs`);
   console.log(`Twilio Webhook: ${webhookUrl}`);
   console.log('============================================================');
+
+  // ElevenLabs Configuration Diagnostics
+  console.log('\n🔑 ElevenLabs Configuration:');
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  if (process.env.ELEVENLABS_API_KEY) {
+    console.log('✅ API Key: SET');
+    console.log(`   Length: ${process.env.ELEVENLABS_API_KEY.length} chars`);
+    console.log(`   Prefix: ${process.env.ELEVENLABS_API_KEY.substring(0, 10)}...`);
+    console.log(`   Suffix: ...${process.env.ELEVENLABS_API_KEY.slice(-6)}`);
+  } else {
+    console.log('❌ API Key: NOT SET');
+  }
+  if (process.env.ELEVENLABS_AGENT_ID) {
+    console.log(`✅ Default Agent: ${process.env.ELEVENLABS_AGENT_ID}`);
+  } else {
+    console.log('⚠️  Default Agent: NOT SET (must specify agentId in API calls)');
+  }
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
 
   logger.info('Server started successfully', {
     port: PORT,
