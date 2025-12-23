@@ -1168,8 +1168,10 @@ app.get('/twiml-stream', (req, res) => {
     return res.status(400).send('Invalid agentId format - only alphanumeric, underscore, and hyphen characters allowed');
   }
 
-  // Build ElevenLabs WebSocket URL with properly encoded agentId
-  const wsUrl = `wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${encodeURIComponent(agentId)}`;
+  // IMPORTANT: ElevenLabs requires xi-api-key as a query parameter in the WebSocket URL
+  // for authentication during the initial handshake. Twilio Parameters are sent as
+  // WebSocket messages AFTER connection, which is too late for ElevenLabs auth.
+  const wsUrl = `wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${encodeURIComponent(agentId)}&xi-api-key=${process.env.ELEVENLABS_API_KEY}`;
 
   // Parse dynamic variables if provided
   let parsedDynamicVariables = {};
@@ -1239,31 +1241,40 @@ app.get('/twiml-stream', (req, res) => {
       .replace(/'/g, '&apos;');
   };
 
-  // Build parameters XML dynamically
-  let parametersXml = `<Parameter name="xi-api-key" value="${escapeXml(process.env.ELEVENLABS_API_KEY)}" />`;
+  // Build parameters XML dynamically (no longer need xi-api-key here - it's in the URL)
+  let parametersXml = '';
   
   if (!skipClientData) {
     // Serialize and XML-encode the client data for XML
     const clientDataJson = JSON.stringify(clientData);
     const clientDataEncoded = escapeXml(clientDataJson);
-    parametersXml += `\n      <Parameter name="conversation_initiation_client_data" value="${clientDataEncoded}" />`;
+    parametersXml = `<Parameter name="conversation_initiation_client_data" value="${clientDataEncoded}" />`;
   }
 
-  // Generate TwiML XML with CORRECT parameter name: xi-api-key
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+  // Generate TwiML - parameters may be empty if skipClientData is true
+  const twiml = parametersXml 
+    ? `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
     <Stream url="${escapeXml(wsUrl)}">
       ${parametersXml}
     </Stream>
   </Connect>
+</Response>`
+    : `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Connect>
+    <Stream url="${escapeXml(wsUrl)}" />
+  </Connect>
 </Response>`;
 
   logger.info('✅ Sending TwiML to Twilio', { 
     wsUrl,
     hasApiKey: !!process.env.ELEVENLABS_API_KEY,
+    apiKeyInUrl: true,  // API key is in URL for WebSocket handshake authentication
     skipClientData: !!skipClientData,
     clientDataSize: skipClientData ? 0 : Object.keys(clientData).length,
+    hasParameters: !!parametersXml,
     twimlLength: twiml.length
   });
 
