@@ -1233,6 +1233,11 @@ app.get('/twiml-stream', (req, res) => {
     return res.status(500).send('Failed to generate TwiML');
   }
 
+  // Note: wsUrl is not XML-escaped because:
+  // 1. It's constructed from validated agentId (alphanumeric, underscores, hyphens only)
+  // 2. The agentId is already URL-encoded with encodeURIComponent
+  // 3. The base URL is static and safe
+  // 4. XML escaping would break the WebSocket connection
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
