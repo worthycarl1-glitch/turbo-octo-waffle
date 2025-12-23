@@ -1140,7 +1140,7 @@ app.get('/twiml-stream', (req, res) => {
     hasDynamicVariables: !!dynamicVariables,
     hasCustomPrompt: !!customPrompt,
     hasFirstMessage: !!firstMessage,
-    queryParams: Object.keys(req.query)
+    paramCount: Object.keys(req.query).length
   });
 
   // Validate required parameters
@@ -1175,8 +1175,7 @@ app.get('/twiml-stream', (req, res) => {
     try {
       parsedDynamicVariables = JSON.parse(dynamicVariables);
       logger.info('✅ Parsed dynamic variables', { 
-        count: Object.keys(parsedDynamicVariables).length,
-        keys: Object.keys(parsedDynamicVariables)
+        count: Object.keys(parsedDynamicVariables).length
       });
     } catch (e) {
       logger.warn('⚠️ Failed to parse dynamic variables', { 
@@ -1256,7 +1255,7 @@ app.get('/twiml-stream', (req, res) => {
   logger.info('✅ Sending TwiML to Twilio', { 
     wsUrl,
     hasApiKey: !!process.env.ELEVENLABS_API_KEY,
-    clientDataKeys: Object.keys(clientData),
+    clientDataSize: Object.keys(clientData).length,
     clientDataJsonLength: clientDataJson.length,
     twimlLength: twiml.length
   });
