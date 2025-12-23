@@ -1155,16 +1155,15 @@ app.get('/twiml-stream', (req, res) => {
     return res.status(500).send('Server configuration error: Missing API key');
   }
 
-  // Log API key info (first 10 chars for security) - only in debug mode
-  if (process.env.LOG_LEVEL === 'debug') {
-    logger.debug('🔑 API Key check', {
-      keyPrefix: process.env.ELEVENLABS_API_KEY.substring(0, 10),
-      keyLength: process.env.ELEVENLABS_API_KEY.length
-    });
-  } else {
-    logger.info('🔑 API Key configured', {
-      keyLength: process.env.ELEVENLABS_API_KEY.length
-    });
+  // Log API key info (length only for security)
+  logger.info('🔑 API Key configured', {
+    keyLength: process.env.ELEVENLABS_API_KEY.length
+  });
+
+  // Validate agentId contains only safe characters for URL
+  if (!/^[a-zA-Z0-9_-]+$/.test(agentId)) {
+    logger.error('❌ Invalid agentId format', { agentId });
+    return res.status(400).send('Invalid agentId format - only alphanumeric, underscore, and hyphen characters allowed');
   }
 
   // Build ElevenLabs WebSocket URL with properly encoded agentId
