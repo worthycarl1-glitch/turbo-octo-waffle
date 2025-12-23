@@ -1139,19 +1139,90 @@ app.get('/twiml-stream', (req, res) => {
     conversationId,
     hasDynamicVariables: !!dynamicVariables,
     hasCustomPrompt: !!customPrompt,
-    hasFirstMessage: !!firstMessage
+    hasFirstMessage: !!firstMessage,
+    paramCount: Object.keys(req.query).length
   });
 
-  if (!agentId || !conversationId) {
-    logger.error('Missing required parameters for TwiML stream', { agentId, conversationId });
-    return res.status(400).send('Missing required parameters');
+  // Validate required parameters
+  if (!agentId) {
+    logger.error('❌ Missing agentId parameter');
+    return res.status(400).send('Missing agentId parameter');
   }
 
-  // Validate agentId format (alphanumeric, underscores, and hyphens only)
-  if (!/^[a-zA-Z0-9_-]+$/.test(agentId)) {
-    logger.error('Invalid agentId format', { agentId });
-    return res.status(400).send('Invalid agentId format');
+  // Check API key exists
+  if (!process.env.ELEVENLABS_API_KEY) {
+    logger.error('❌ ELEVENLABS_API_KEY not set in environment');
+    return res.status(500).send('Server configuration error: Missing API key');
   }
+
+  // Log API key info (length only for security)
+  logger.info('🔑 API Key configured', {
+    keyLength: process.env.ELEVENLABS_API_KEY.length
+  });
+
+  // Validate agentId contains only safe characters for URL
+  if (!/^[a-zA-Z0-9_-]+$/.test(agentId)) {
+    logger.error('❌ Invalid agentId format', { agentId });
+    return res.status(400).send('Invalid agentId format - only alphanumeric, underscore, and hyphen characters allowed');
+  }
+
+  // Build ElevenLabs WebSocket URL with properly encoded agentId
+  const wsUrl = `wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${encodeURIComponent(agentId)}`;
+
+  // Parse dynamic variables if provided
+  let parsedDynamicVariables = {};
+  if (dynamicVariables) {
+    try {
+      parsedDynamicVariables = JSON.parse(dynamicVariables);
+      logger.info('✅ Parsed dynamic variables', { 
+        count: Object.keys(parsedDynamicVariables).length
+      });
+    } catch (e) {
+      logger.warn('⚠️ Failed to parse dynamic variables', { 
+        error: e.message
+      });
+    }
+  }
+
+  // Build conversation initiation client data
+  const clientData = {};
+
+  // Always include conversation ID if provided
+  if (conversationId) {
+    clientData.conversation_id = conversationId;
+  }
+
+  // Add dynamic variables
+  if (Object.keys(parsedDynamicVariables).length > 0) {
+    clientData.dynamic_variables = parsedDynamicVariables;
+  }
+
+  // Add conversation config overrides
+  if (customPrompt || firstMessage) {
+    clientData.conversation_config_override = {};
+    
+    if (customPrompt) {
+      clientData.conversation_config_override.agent = {
+        prompt: customPrompt
+      };
+    }
+    
+    if (firstMessage) {
+      if (!clientData.conversation_config_override.agent) {
+        clientData.conversation_config_override.agent = {};
+      }
+      clientData.conversation_config_override.agent.first_message = firstMessage;
+    }
+  }
+
+  logger.info('📦 Client data prepared', { 
+    hasConversationId: !!clientData.conversation_id,
+    hasDynamicVariables: !!clientData.dynamic_variables,
+    dynamicVariableCount: clientData.dynamic_variables ? Object.keys(clientData.dynamic_variables).length : 0,
+    hasConfigOverride: !!clientData.conversation_config_override,
+    hasCustomPrompt: !!(clientData.conversation_config_override?.agent?.prompt),
+    hasFirstMessage: !!(clientData.conversation_config_override?.agent?.first_message)
+  });
 
   // Helper function to escape XML attribute values
   const escapeXml = (unsafe) => {
@@ -1166,97 +1237,34 @@ app.get('/twiml-stream', (req, res) => {
       .replace(/'/g, '&apos;');
   };
 
-  // Validate API key exists
-  if (!process.env.ELEVENLABS_API_KEY) {
-    logger.error('ELEVENLABS_API_KEY not configured');
-    return res.status(500).send('Server configuration error');
-  }
+  // Serialize and XML-encode the client data for XML
+  const clientDataJson = JSON.stringify(clientData);
+  const clientDataEncoded = escapeXml(clientDataJson);
 
-  // Build ElevenLabs WebSocket URL with properly encoded agentId
-  const wsUrl = `wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${encodeURIComponent(agentId)}`;
-
-  // Parse dynamic variables if provided
-  let parsedDynamicVariables = {};
-  if (dynamicVariables) {
-    try {
-      parsedDynamicVariables = JSON.parse(dynamicVariables);
-    } catch (e) {
-      logger.warn('Failed to parse dynamic variables', { 
-        error: e.message,
-        originalValue: dynamicVariables 
-      });
-    }
-  }
-
-  // Build conversation initiation data
-  const conversationData = {
-    conversation_id: conversationId
-  };
-
-  // Add dynamic variables if provided
-  if (Object.keys(parsedDynamicVariables).length > 0) {
-    conversationData.dynamic_variables = parsedDynamicVariables;
-  }
-
-  // Add conversation config overrides if provided
-  if (customPrompt || firstMessage) {
-    conversationData.conversation_config_override = {};
-    
-    if (customPrompt) {
-      conversationData.conversation_config_override.agent = {
-        prompt: customPrompt
-      };
-    }
-    
-    if (firstMessage) {
-      if (!conversationData.conversation_config_override.agent) {
-        conversationData.conversation_config_override.agent = {};
-      }
-      conversationData.conversation_config_override.agent.first_message = firstMessage;
-    }
-  }
-
-  // Generate TwiML XML with properly escaped values
-  // Note: API key is passed as a Stream parameter, which is the standard method for
-  // Twilio Media Streams authentication. The key is transmitted over HTTPS to Twilio,
-  // then used to authenticate the WebSocket connection to ElevenLabs.
-  // WARNING: Twilio may log TwiML content. Ensure Twilio account security is maintained.
-  
-  let conversationDataJson;
-  try {
-    conversationDataJson = JSON.stringify(conversationData);
-  } catch (error) {
-    logger.error('Failed to serialize conversation data', { 
-      error: error.message,
-      conversationId 
-    });
-    return res.status(500).send('Failed to generate TwiML');
-  }
-
-  // Note: wsUrl is not XML-escaped because:
-  // 1. It's constructed from validated agentId (alphanumeric, underscores, hyphens only)
-  // 2. The agentId is already URL-encoded with encodeURIComponent
-  // 3. The base URL is static and safe
-  // 4. XML escaping would break the WebSocket connection
+  // Generate TwiML XML with CORRECT parameter name: xi-api-key
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <Stream url="${wsUrl}">
-      <Parameter name="authorization" value="${escapeXml(process.env.ELEVENLABS_API_KEY)}"/>
-      <Parameter name="conversation_config_override" value="${escapeXml(conversationDataJson)}"/>
+    <Stream url="${escapeXml(wsUrl)}">
+      <Parameter name="xi-api-key" value="${escapeXml(process.env.ELEVENLABS_API_KEY)}" />
+      <Parameter name="conversation_initiation_client_data" value="${clientDataEncoded}" />
     </Stream>
   </Connect>
 </Response>`;
 
-  // Set correct content type and send TwiML
+  logger.info('✅ Sending TwiML to Twilio', { 
+    wsUrl,
+    hasApiKey: !!process.env.ELEVENLABS_API_KEY,
+    clientDataSize: Object.keys(clientData).length,
+    clientDataJsonLength: clientDataJson.length,
+    twimlLength: twiml.length
+  });
+
+  // Note: TwiML content is NOT logged to avoid exposing API key in logs
+
+  // Set correct content type and send
   res.set('Content-Type', 'text/xml');
   res.send(twiml);
-
-  logger.info('TwiML sent to Twilio', { 
-    conversationId, 
-    agentId,
-    wsUrl 
-  });
 });
 
 /**
