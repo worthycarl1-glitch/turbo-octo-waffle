@@ -1171,7 +1171,7 @@ app.get('/twiml-stream', (req, res) => {
   // IMPORTANT: ElevenLabs requires xi-api-key as a query parameter in the WebSocket URL
   // for authentication during the initial handshake. Twilio Parameters are sent as
   // WebSocket messages AFTER connection, which is too late for ElevenLabs auth.
-  const wsUrl = `wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${encodeURIComponent(agentId)}&xi-api-key=${process.env.ELEVENLABS_API_KEY}`;
+  const wsUrl = `wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${encodeURIComponent(agentId)}&xi-api-key=${encodeURIComponent(process.env.ELEVENLABS_API_KEY)}`;
 
   // Parse dynamic variables if provided
   let parsedDynamicVariables = {};
@@ -1268,8 +1268,11 @@ app.get('/twiml-stream', (req, res) => {
   </Connect>
 </Response>`;
 
+  // Redact API key from URL for logging
+  const wsUrlForLogging = wsUrl.replace(/xi-api-key=[^&]+/, 'xi-api-key=REDACTED');
+  
   logger.info('✅ Sending TwiML to Twilio', { 
-    wsUrl,
+    wsUrl: wsUrlForLogging,  // Log redacted URL to avoid exposing API key
     hasApiKey: !!process.env.ELEVENLABS_API_KEY,
     apiKeyInUrl: true,  // API key is in URL for WebSocket handshake authentication
     skipClientData: !!skipClientData,
