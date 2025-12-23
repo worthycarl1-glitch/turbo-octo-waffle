@@ -1220,12 +1220,25 @@ app.get('/twiml-stream', (req, res) => {
   // Note: API key is passed as a Stream parameter, which is the standard method for
   // Twilio Media Streams authentication. The key is transmitted over HTTPS to Twilio,
   // then used to authenticate the WebSocket connection to ElevenLabs.
+  // WARNING: Twilio may log TwiML content. Ensure Twilio account security is maintained.
+  
+  let conversationDataJson;
+  try {
+    conversationDataJson = JSON.stringify(conversationData);
+  } catch (error) {
+    logger.error('Failed to serialize conversation data', { 
+      error: error.message,
+      conversationId 
+    });
+    return res.status(500).send('Failed to generate TwiML');
+  }
+
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <Stream url="${escapeXml(wsUrl)}">
+    <Stream url="${wsUrl}">
       <Parameter name="authorization" value="${escapeXml(process.env.ELEVENLABS_API_KEY)}"/>
-      <Parameter name="conversation_config_override" value="${escapeXml(JSON.stringify(conversationData))}"/>
+      <Parameter name="conversation_config_override" value="${escapeXml(conversationDataJson)}"/>
     </Stream>
   </Connect>
 </Response>`;
