@@ -1187,13 +1187,23 @@ app.get('/twiml-stream', (req, res) => {
     }
   }
 
+  // Helper function to escape XML attribute values
+  const escapeXml = (unsafe) => {
+    return unsafe
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;');
+  };
+
   // Generate TwiML XML
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
     <Stream url="${wsUrl}">
-      <Parameter name="authorization" value="${process.env.ELEVENLABS_API_KEY}"/>
-      <Parameter name="conversation_config_override" value='${JSON.stringify(conversationData)}'/>
+      <Parameter name="authorization" value="${escapeXml(process.env.ELEVENLABS_API_KEY)}"/>
+      <Parameter name="conversation_config_override" value="${escapeXml(JSON.stringify(conversationData))}"/>
     </Stream>
   </Connect>
 </Response>`;
