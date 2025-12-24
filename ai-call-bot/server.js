@@ -1173,6 +1173,9 @@ app.get('/twiml-stream', (req, res) => {
   // WebSocket messages AFTER connection, which is too late for ElevenLabs auth.
   const wsUrl = `wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${encodeURIComponent(agentId)}&xi-api-key=${encodeURIComponent(process.env.ELEVENLABS_API_KEY)}`;
 
+  // Escape the URL for use in XML attribute
+  const wsUrlEscaped = wsUrl.replace(/&/g, '&amp;');
+
   // Parse dynamic variables if provided
   let parsedDynamicVariables = {};
   if (dynamicVariables) {
@@ -1286,13 +1289,11 @@ app.get('/twiml-stream', (req, res) => {
   }
 
   // Generate TwiML - parameters may be empty if skipClientData is true
-  // IMPORTANT: Do NOT escape the wsUrl - Twilio needs the raw URL with & characters
-  // Escaping to &amp; causes ElevenLabs to receive a malformed URL and reject the connection
   const twiml = parametersXml 
     ? `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <Stream url="${wsUrl}">
+    <Stream url="${wsUrlEscaped}">
       ${parametersXml}
     </Stream>
   </Connect>
@@ -1300,7 +1301,7 @@ app.get('/twiml-stream', (req, res) => {
     : `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <Stream url="${wsUrl}" />
+    <Stream url="${wsUrlEscaped}" />
   </Connect>
 </Response>`;
 
@@ -1312,9 +1313,10 @@ app.get('/twiml-stream', (req, res) => {
   const streamUrlForLogging = streamUrlInTwiml ? streamUrlInTwiml.replace(/xi-api-key=[^&]+/, 'xi-api-key=REDACTED') : null;
   
   logger.info('✅ Sending TwiML to Twilio', { 
-    wsUrl: wsUrlForLogging,  // Log redacted URL to avoid exposing API key
+    wsUrl_raw: wsUrlForLogging,  // Raw URL with & (for logging only)
+    wsUrl_escaped: wsUrlEscaped.replace(/xi-api-key=[^&]+/, 'xi-api-key=REDACTED'),  // Escaped URL with &amp; (what's sent in XML)
     hasApiKey: !!process.env.ELEVENLABS_API_KEY,
-    apiKeyInUrl: true,  // API key is in URL for WebSocket handshake authentication
+    apiKeyInUrl: wsUrl.includes('xi-api-key='),  // API key is in URL for WebSocket handshake authentication
     skipClientData: !!skipClientData,
     clientDataSize: skipClientData ? 0 : Object.keys(clientData).length,
     hasParameters: !!parametersXml,
