@@ -27,20 +27,6 @@ const upload = multer({
 
 const startTime = Date.now();
 
-// In-memory call data store (use Redis in production)
-const callDataStore = new Map();
-
-// Cleanup old call data every hour
-const CLEANUP_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
-setInterval(() => {
-  const oneHourAgo = Date.now() - CLEANUP_INTERVAL_MS;
-  for (const [callSid, data] of callDataStore.entries()) {
-    if (new Date(data.startTime).getTime() < oneHourAgo) {
-      callDataStore.delete(callSid);
-    }
-  }
-}, CLEANUP_INTERVAL_MS);
-
 // Voice cache for /voices endpoint
 let voicesCache = null;
 let voicesCacheTimestamp = null;
@@ -675,8 +661,8 @@ app.post('/make-call', async (req, res) => {
     const effectiveAgentId = agentId || elevenLabsAgentService.getDefaultAgentId();
 
     // ====================================================
-    // ElevenLabs Conversational AI Agent Mode (Updated)
-    // Uses Twilio Media Streams → ElevenLabs WebSocket
+    // NEW: ElevenLabs Conversational AI Agent Mode
+    // When agentId is provided, use ElevenLabs native Twilio API
     // ====================================================
     if (effectiveAgentId) {
       // Check ElevenLabs configuration
@@ -688,15 +674,6 @@ app.post('/make-call', async (req, res) => {
         });
       }
 
-      // Validate phone number
-      if (!to || !to.match(/^\+[1-9]\d{1,14}$/)) {
-        return res.status(400).json({
-          success: false,
-          error: 'Invalid phone number',
-          details: 'Phone number must be in E.164 format (e.g., +14155551234)'
-        });
-      }
-
       // Generate conversation ID for tracking
       const conversationId = `conv_${uuidv4()}`;
 
@@ -704,85 +681,100 @@ app.post('/make-call', async (req, res) => {
         to,
         conversationId,
         agentId: effectiveAgentId,
+        maxDuration,
+        recordCall,
+        hasCallbackUrl: !!callbackUrl,
         metadata,
+        hasCustomPrompt: !!customPrompt,
+        hasFirstMessage: !!firstMessage,
         hasDynamicVariables: dynamicVariables && Object.keys(dynamicVariables).length > 0
       });
 
+      // Get agent phone number ID from environment
+      const agentPhoneNumberId = process.env.ELEVENLABS_PHONE_NUMBER_ID;
+      
+      if (!agentPhoneNumberId) {
+        return res.status(500).json({
+          success: false,
+          error: 'ElevenLabs phone number not configured',
+          details: 'Server is missing ELEVENLABS_PHONE_NUMBER_ID environment variable. Add your Twilio phone number to ElevenLabs dashboard and set the ID here.'
+        });
+      }
+
       try {
-        // Create Twilio client
-        const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-
-        // Build TwiML URL with query params
-        const twimlUrl = new URL(`${BASE_URL}/twiml-stream`);
-        twimlUrl.searchParams.set('agentId', effectiveAgentId);
-        twimlUrl.searchParams.set('conversationId', conversationId);
-        
-        // Add dynamic variables as query params (if provided)
-        if (dynamicVariables && Object.keys(dynamicVariables).length > 0) {
-          twimlUrl.searchParams.set('dynamicVariables', JSON.stringify(dynamicVariables));
-        }
-        
-        // Add custom prompt and first message (if provided)
-        if (customPrompt) {
-          twimlUrl.searchParams.set('customPrompt', customPrompt);
-        }
-        if (firstMessage) {
-          twimlUrl.searchParams.set('firstMessage', firstMessage);
-        }
-
-        // Initiate Twilio call with TwiML URL
-        const call = await twilioClient.calls.create({
-          to: to,
-          from: process.env.TWILIO_PHONE_NUMBER,
-          url: twimlUrl.toString(),
-          method: 'GET',
-          statusCallback: callbackUrl || undefined,
-          statusCallbackMethod: 'POST',
-          statusCallbackEvent: ['completed'],
-          record: recordCall,
-          timeout: 30,
-          machineDetection: 'Enable',
-          asyncAmd: 'true'
-        });
-
-        logger.info('Twilio call initiated with Media Streams', {
-          callSid: call.sid,
-          conversationId,
-          twimlUrl: twimlUrl.toString()
-        });
-
-        // Store call metadata for later retrieval
-        callDataStore.set(call.sid, {
-          conversationId,
-          agentId: effectiveAgentId,
+        // Use ElevenLabs native Twilio outbound call API with customization
+        const result = await elevenLabsAgentService.initiateOutboundCall(
+          effectiveAgentId,
+          agentPhoneNumberId,
           to,
-          metadata: metadata || {},
-          dynamicVariables: dynamicVariables || {},
-          startTime: new Date().toISOString(),
-          status: 'initiated',
-          callbackUrl: callbackUrl || null
+          {
+            customPrompt,
+            firstMessage,
+            dynamicVariables: dynamicVariables || {},
+            overrideLanguage,
+            overrideVoiceId
+          }
+        );
+
+        if (!result.success) {
+          logger.error('ElevenLabs outbound call failed', { 
+            error: result.error,
+            details: result.details
+          });
+          
+          return res.status(500).json({
+            success: false,
+            error: 'Failed to initiate call via ElevenLabs',
+            details: result.error,
+            elevenlabsError: result.details
+          });
+        }
+        
+        logger.info('ElevenLabs call initiated successfully', {
+          conversationId: result.conversationId,
+          callSid: result.callSid,
+          to
         });
 
-        // Return success response
+        // Initialize call tracking for agent-based call
+        // ElevenLabs returns call_sid, but we validate it exists for proper tracking
+        const trackingId = result.callSid || conversationId;
+        if (!result.callSid) {
+          logger.warn('ElevenLabs did not return a callSid, using conversationId for tracking', {
+            conversationId
+          });
+        }
+        
+        callTracker.initCall(trackingId, {
+          conversationId: result.conversationId || conversationId,
+          to,
+          agentId: effectiveAgentId,
+          agentMode: true,
+          elevenLabsManaged: true,
+          metadata,
+          maxDuration,
+          callbackUrl,
+          recordCall
+        });
+
+        // Build response
+        const hasDynVars = dynamicVariables && Object.keys(dynamicVariables).length > 0;
+        const isCustomized = !!(customPrompt || firstMessage || hasDynVars || overrideLanguage || overrideVoiceId);
         return res.json({
           success: true,
-          callSid: call.sid,
-          conversationId,
-          to,
+          callSid: result.callSid,
+          conversationId: result.conversationId,
+          to: to,
           agentId: effectiveAgentId,
           mode: 'agent',
-          provider: 'elevenlabs-websocket',
-          customized: !!(customPrompt || firstMessage || (dynamicVariables && Object.keys(dynamicVariables).length > 0)),
+          provider: 'elevenlabs-native',
+          customized: isCustomized,
           estimatedDuration: maxDuration,
           timestamp: new Date().toISOString()
         });
 
       } catch (error) {
-        logger.error('Error initiating Twilio call', { 
-          error: error.message, 
-          stack: error.stack 
-        });
-        
+        logger.error('Error calling ElevenLabs API', { error: error.message, stack: error.stack });
         return res.status(500).json({
           success: false,
           error: 'Failed to initiate call',
@@ -1119,270 +1111,6 @@ app.post('/make-call', async (req, res) => {
       timestamp: new Date().toISOString()
     });
   }
-});
-
-/**
- * TwiML endpoint for ElevenLabs Media Stream
- * Called by Twilio when call is answered
- */
-app.get('/twiml-stream', (req, res) => {
-  const { 
-    agentId, 
-    conversationId, 
-    dynamicVariables,
-    customPrompt,
-    firstMessage,
-    skipClientData  // Optional test mode to skip conversation_initiation_client_data
-  } = req.query;
-
-  logger.info('TwiML stream requested', { 
-    agentId, 
-    conversationId,
-    hasDynamicVariables: !!dynamicVariables,
-    hasCustomPrompt: !!customPrompt,
-    hasFirstMessage: !!firstMessage,
-    skipClientData: !!skipClientData,
-    paramCount: Object.keys(req.query).length
-  });
-
-  // Validate required parameters
-  if (!agentId) {
-    logger.error('❌ Missing agentId parameter');
-    return res.status(400).send('Missing agentId parameter');
-  }
-
-  // Check API key exists
-  if (!process.env.ELEVENLABS_API_KEY) {
-    logger.error('❌ ELEVENLABS_API_KEY not set in environment');
-    return res.status(500).send('Server configuration error: Missing API key');
-  }
-
-  // Log API key info (length only for security)
-  logger.info('🔑 API Key configured', {
-    keyLength: process.env.ELEVENLABS_API_KEY.length
-  });
-
-  // Validate agentId contains only safe characters for URL
-  if (!/^[a-zA-Z0-9_-]+$/.test(agentId)) {
-    logger.error('❌ Invalid agentId format', { agentId });
-    return res.status(400).send('Invalid agentId format - only alphanumeric, underscore, and hyphen characters allowed');
-  }
-
-  // IMPORTANT: ElevenLabs requires xi-api-key as a query parameter in the WebSocket URL
-  // for authentication during the initial handshake. Twilio Parameters are sent as
-  // WebSocket messages AFTER connection, which is too late for ElevenLabs auth.
-  const wsUrl = `wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${encodeURIComponent(agentId)}&xi-api-key=${encodeURIComponent(process.env.ELEVENLABS_API_KEY)}`;
-
-  // Escape the URL for use in XML attribute
-  const wsUrlEscaped = wsUrl.replace(/&/g, '&amp;');
-
-  // Parse dynamic variables if provided
-  let parsedDynamicVariables = {};
-  if (dynamicVariables) {
-    try {
-      parsedDynamicVariables = JSON.parse(dynamicVariables);
-      logger.info('✅ Parsed dynamic variables', { 
-        count: Object.keys(parsedDynamicVariables).length
-      });
-    } catch (e) {
-      logger.warn('⚠️ Failed to parse dynamic variables', { 
-        error: e.message
-      });
-    }
-  }
-
-  // Build conversation initiation client data
-  const clientData = {};
-
-  // Always include conversation ID if provided
-  if (conversationId) {
-    clientData.conversation_id = conversationId;
-  }
-
-  // Add dynamic variables
-  if (Object.keys(parsedDynamicVariables).length > 0) {
-    clientData.dynamic_variables = parsedDynamicVariables;
-  }
-
-  // Add conversation config overrides
-  if (customPrompt || firstMessage) {
-    clientData.conversation_config_override = {};
-    
-    if (customPrompt) {
-      clientData.conversation_config_override.agent = {
-        prompt: customPrompt
-      };
-    }
-    
-    if (firstMessage) {
-      if (!clientData.conversation_config_override.agent) {
-        clientData.conversation_config_override.agent = {};
-      }
-      clientData.conversation_config_override.agent.first_message = firstMessage;
-    }
-  }
-
-  logger.info('📦 Client data prepared', { 
-    hasConversationId: !!clientData.conversation_id,
-    hasDynamicVariables: !!clientData.dynamic_variables,
-    dynamicVariableCount: clientData.dynamic_variables ? Object.keys(clientData.dynamic_variables).length : 0,
-    hasConfigOverride: !!clientData.conversation_config_override,
-    hasCustomPrompt: !!(clientData.conversation_config_override?.agent?.prompt),
-    hasFirstMessage: !!(clientData.conversation_config_override?.agent?.first_message)
-  });
-
-  // Helper function to escape XML attribute values
-  const escapeXml = (unsafe) => {
-    if (unsafe === null || unsafe === undefined) {
-      return '';
-    }
-    const result = String(unsafe)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&apos;');
-    
-    // Verify escaping worked
-    if (unsafe.includes('"') && !result.includes('&quot;')) {
-      logger.error('CRITICAL: escapeXml failed to escape quotes!', { unsafe, result });
-    }
-    
-    return result;
-  };
-
-  // Build parameters XML dynamically (no longer need xi-api-key here - it's in the URL)
-  let parametersXml = '';
-  
-  if (!skipClientData) {
-    // Serialize and XML-encode the client data for XML
-    const clientDataJson = JSON.stringify(clientData);
-    
-    // DEBUG: Log before escaping
-    logger.info('Before XML escape:', { clientDataJson });
-    
-    // Primary method: use escapeXml
-    let clientDataEncoded = escapeXml(clientDataJson);
-    
-    // DEBUG: Log after escaping
-    logger.info('After XML escape:', { clientDataEncoded });
-    
-    // FALLBACK: If escapeXml failed, manually escape quotes
-    if (clientDataEncoded.includes('"') && !clientDataEncoded.includes('&quot;')) {
-      logger.warn('escapeXml failed, using manual escape as fallback');
-      clientDataEncoded = clientDataJson
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&apos;');
-    }
-    
-    // FINAL VERIFICATION
-    logger.info('Final clientDataEncoded:', { 
-      clientDataEncoded,
-      hasRawQuotes: clientDataEncoded.includes('"'),
-      hasEscapedQuotes: clientDataEncoded.includes('&quot;')
-    });
-    
-    parametersXml = `<Parameter name="conversation_initiation_client_data" value="${clientDataEncoded}" />`;
-  }
-
-  // Generate TwiML - parameters may be empty if skipClientData is true
-  const twiml = parametersXml 
-    ? `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Connect>
-    <Stream url="${wsUrlEscaped}">
-      ${parametersXml}
-    </Stream>
-  </Connect>
-</Response>`
-    : `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Connect>
-    <Stream url="${wsUrlEscaped}" />
-  </Connect>
-</Response>`;
-
-  // Redact API key from URL for logging
-  const wsUrlForLogging = wsUrl.replace(/xi-api-key=[^&]+/, 'xi-api-key=REDACTED');
-  
-  // Extract the Stream URL from the TwiML for logging verification
-  const streamUrlInTwiml = twiml.match(/<Stream url="([^"]+)"/)?.[1];
-  const streamUrlForLogging = streamUrlInTwiml ? streamUrlInTwiml.replace(/xi-api-key=[^&]+/, 'xi-api-key=REDACTED') : null;
-  
-  logger.info('✅ Sending TwiML to Twilio', { 
-    wsUrl_raw: wsUrlForLogging,  // Raw URL with & (for logging only)
-    wsUrl_escaped: wsUrlEscaped.replace(/xi-api-key=[^&]+/, 'xi-api-key=REDACTED'),  // Escaped URL with &amp; (what's sent in XML)
-    hasApiKey: !!process.env.ELEVENLABS_API_KEY,
-    apiKeyInUrl: wsUrl.includes('xi-api-key='),  // API key is in URL for WebSocket handshake authentication
-    skipClientData: !!skipClientData,
-    clientDataSize: skipClientData ? 0 : Object.keys(clientData).length,
-    hasParameters: !!parametersXml,
-    twimlLength: twiml.length
-  });
-
-  // DEBUG: Verify URL encoding in TwiML
-  logger.info('🔍 URL Encoding Verification:', {
-    wsUrl_hasAmpersand: wsUrl.includes('&'),
-    wsUrl_hasDoubleEscape: wsUrl.includes('&amp;'),
-    streamUrlInTwiml_hasAmpersand: !!streamUrlInTwiml?.includes('&'),
-    streamUrlInTwiml_hasDoubleEscape: !!streamUrlInTwiml?.includes('&amp;'),
-    streamUrlInTwiml: streamUrlForLogging
-  });
-
-  // Note: TwiML content is NOT logged to avoid exposing API key in logs
-
-  // DEBUG: Log what was actually sent
-  logger.info('TwiML sent to Twilio:', { 
-    twimlLength: twiml.length,
-    containsRawQuotes: twiml.includes('value="{"'),
-    containsEscapedQuotes: twiml.includes('&quot;'),
-    firstParameter: twiml.match(/<Parameter[^>]+>/)?.[0]
-  });
-
-  // Set correct content type and send
-  res.set('Content-Type', 'text/xml; charset=utf-8');
-  res.send(twiml);
-});
-
-// Test endpoint to verify XML escaping
-app.get('/test-xml-escape', (req, res) => {
-  // Helper function to escape XML (same as in /twiml-stream)
-  const escapeXml = (unsafe) => {
-    if (unsafe === null || unsafe === undefined) {
-      return '';
-    }
-    const result = String(unsafe)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&apos;');
-    
-    // Verify escaping worked
-    if (unsafe.includes('"') && !result.includes('&quot;')) {
-      logger.error('CRITICAL: escapeXml failed to escape quotes!', { unsafe, result });
-    }
-    
-    return result;
-  };
-
-  const testJson = JSON.stringify({ conversation_id: "test123" });
-  const escaped = escapeXml(testJson);
-  
-  const response = {
-    original: testJson,
-    escaped: escaped,
-    hasRawQuotes: escaped.includes('"'),
-    hasEscapedQuotes: escaped.includes('&quot;'),
-    escapeWorking: escaped.includes('&quot;') && !escaped.includes('"')
-  };
-  
-  logger.info('Test XML escape endpoint called', response);
-  
-  res.json(response);
 });
 
 /**
@@ -2391,98 +2119,38 @@ app.post('/recording-callback', async (req, res) => {
 });
 
 /**
- * Twilio status callback webhook
- * Called when call completes
- */
-app.post('/webhooks/twilio/status', async (req, res) => {
-  const {
-    CallSid,
-    CallStatus,
-    CallDuration,
-    RecordingUrl,
-    RecordingSid
-  } = req.body;
-
-  logger.info('Twilio status callback received', {
-    callSid: CallSid,
-    status: CallStatus,
-    duration: CallDuration
-  });
-
-  // Get call data
-  const callData = callDataStore.get(CallSid);
-
-  if (callData) {
-    callData.status = CallStatus;
-    callData.duration = parseInt(CallDuration) || 0;
-    callData.endTime = new Date().toISOString();
-    callData.recordingUrl = RecordingUrl;
-    callData.recordingSid = RecordingSid;
-  }
-
-  // If user provided a callback URL, forward the data
-  if (callData && callData.callbackUrl) {
-    try {
-      await fetch(callData.callbackUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          callSid: CallSid,
-          conversationId: callData.conversationId,
-          status: CallStatus,
-          duration: parseInt(CallDuration) || 0,
-          recording: RecordingUrl,
-          metadata: callData.metadata,
-          timestamp: new Date().toISOString()
-        })
-      });
-    } catch (error) {
-      logger.error('Failed to forward callback', { error: error.message });
-    }
-  }
-
-  res.sendStatus(200);
-});
-
-/**
  * GET /call-status/:callSid - Real-time call status endpoint
  */
-app.get('/call-status/:callSid', async (req, res) => {
-  const { callSid } = req.params;
-
+app.get('/call-status/:callSid', (req, res) => {
   try {
-    // Create Twilio client
-    const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+    const { callSid } = req.params;
 
-    // Get call from Twilio
-    const call = await twilioClient.calls(callSid).fetch();
-    
-    // Get stored metadata
-    const callData = callDataStore.get(callSid) || {};
+    if (!callSid) {
+      return res.status(400).json({
+        success: false,
+        error: 'callSid parameter is required'
+      });
+    }
 
-    const response = {
+    const status = callTracker.getCallStatus(callSid);
+
+    if (!status) {
+      return res.status(404).json({
+        success: false,
+        error: 'Call not found',
+        details: 'The specified call SID was not found in active calls'
+      });
+    }
+
+    res.json({
       success: true,
-      callSid,
-      conversationId: callData.conversationId,
-      status: call.status,
-      direction: call.direction,
-      from: call.from,
-      to: call.to,
-      duration: call.duration ? parseInt(call.duration) : 0,
-      startTime: call.startTime,
-      endTime: call.endTime,
-      agentId: callData.agentId,
-      metadata: callData.metadata || {},
-      timestamp: new Date().toISOString()
-    };
-
-    res.json(response);
+      ...status
+    });
   } catch (error) {
-    logger.error('Error fetching call status', { error: error.message, callSid });
+    logger.error('Error getting call status', { error: error.message });
     res.status(500).json({
       success: false,
-      error: 'Failed to fetch call status',
-      details: error.message
+      error: error.message
     });
   }
 });
