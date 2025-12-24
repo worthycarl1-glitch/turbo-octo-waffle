@@ -1325,8 +1325,8 @@ app.get('/twiml-stream', (req, res) => {
   logger.info('🔍 URL Encoding Verification:', {
     wsUrl_hasAmpersand: wsUrl.includes('&'),
     wsUrl_hasDoubleEscape: wsUrl.includes('&amp;'),
-    streamUrlInTwiml_hasAmpersand: streamUrlInTwiml?.includes('&') || false,
-    streamUrlInTwiml_hasDoubleEscape: streamUrlInTwiml?.includes('&amp;') || false,
+    streamUrlInTwiml_hasAmpersand: !!streamUrlInTwiml?.includes('&'),
+    streamUrlInTwiml_hasDoubleEscape: !!streamUrlInTwiml?.includes('&amp;'),
     streamUrlInTwiml: streamUrlForLogging
   });
 
