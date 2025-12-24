@@ -390,7 +390,7 @@ class ElevenLabsAgentService {
       // Build the base payload
       const elevenLabsPayload = {
         agent_id: agentId,
-        agent_phone_number_id: phoneNumberId,
+        phone_number_id: phoneNumberId,
         to_number: toNumber
       };
 
@@ -449,7 +449,7 @@ class ElevenLabsAgentService {
         });
       }
 
-      const response = await fetch('https://api.elevenlabs.io/v1/convai/twilio/outbound-call', {
+      const response = await fetch('https://api.elevenlabs.io/v1/convai/conversation/outbound_call', {
         method: 'POST',
         headers: {
           'xi-api-key': process.env.ELEVENLABS_API_KEY,
