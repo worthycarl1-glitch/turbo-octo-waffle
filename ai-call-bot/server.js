@@ -2593,25 +2593,6 @@ const server = app.listen(PORT, HOST, () => {
   console.log(`Twilio Webhook: ${webhookUrl}`);
   console.log('============================================================');
 
-  // ElevenLabs Configuration Diagnostics
-  console.log('\n🔑 ElevenLabs Configuration:');
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  if (process.env.ELEVENLABS_API_KEY) {
-    console.log('✅ API Key: SET');
-    console.log(`   Length: ${process.env.ELEVENLABS_API_KEY.length} chars`);
-    // Only show first 7 and last 4 characters for security
-    console.log(`   Prefix: ${process.env.ELEVENLABS_API_KEY.substring(0, 7)}...`);
-    console.log(`   Suffix: ...${process.env.ELEVENLABS_API_KEY.slice(-4)}`);
-  } else {
-    console.log('❌ API Key: NOT SET');
-  }
-  if (process.env.ELEVENLABS_AGENT_ID) {
-    console.log(`✅ Default Agent: ${process.env.ELEVENLABS_AGENT_ID}`);
-  } else {
-    console.log('⚠️  Default Agent: NOT SET (must specify agentId in API calls)');
-  }
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
-
   logger.info('Server started successfully', {
     port: PORT,
     host: HOST,
