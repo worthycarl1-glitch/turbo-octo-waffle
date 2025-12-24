@@ -1286,11 +1286,13 @@ app.get('/twiml-stream', (req, res) => {
   }
 
   // Generate TwiML - parameters may be empty if skipClientData is true
+  // IMPORTANT: Do NOT escape the wsUrl - Twilio needs the raw URL with & characters
+  // Escaping to &amp; causes ElevenLabs to receive a malformed URL and reject the connection
   const twiml = parametersXml 
     ? `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <Stream url="${escapeXml(wsUrl)}">
+    <Stream url="${wsUrl}">
       ${parametersXml}
     </Stream>
   </Connect>
@@ -1298,12 +1300,16 @@ app.get('/twiml-stream', (req, res) => {
     : `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <Stream url="${escapeXml(wsUrl)}" />
+    <Stream url="${wsUrl}" />
   </Connect>
 </Response>`;
 
   // Redact API key from URL for logging
   const wsUrlForLogging = wsUrl.replace(/xi-api-key=[^&]+/, 'xi-api-key=REDACTED');
+  
+  // Extract the Stream URL from the TwiML for logging verification
+  const streamUrlInTwiml = twiml.match(/<Stream url="([^"]+)"/)?.[1];
+  const streamUrlForLogging = streamUrlInTwiml ? streamUrlInTwiml.replace(/xi-api-key=[^&]+/, 'xi-api-key=REDACTED') : null;
   
   logger.info('✅ Sending TwiML to Twilio', { 
     wsUrl: wsUrlForLogging,  // Log redacted URL to avoid exposing API key
@@ -1313,6 +1319,15 @@ app.get('/twiml-stream', (req, res) => {
     clientDataSize: skipClientData ? 0 : Object.keys(clientData).length,
     hasParameters: !!parametersXml,
     twimlLength: twiml.length
+  });
+
+  // DEBUG: Verify URL encoding in TwiML
+  logger.info('🔍 URL Encoding Verification:', {
+    wsUrl_hasAmpersand: wsUrl.includes('&'),
+    wsUrl_hasDoubleEscape: wsUrl.includes('&amp;'),
+    streamUrlInTwiml_hasAmpersand: !!streamUrlInTwiml?.includes('&'),
+    streamUrlInTwiml_hasDoubleEscape: !!streamUrlInTwiml?.includes('&amp;'),
+    streamUrlInTwiml: streamUrlForLogging
   });
 
   // Note: TwiML content is NOT logged to avoid exposing API key in logs
