@@ -751,10 +751,14 @@ app.post('/make-call', async (req, res) => {
           agentId: effectiveAgentId,
           agentMode: true,
           elevenLabsManaged: true,
+          elevenLabsConversationId: result.conversationId,
           metadata,
           maxDuration,
           callbackUrl,
-          recordCall
+          recordCall,
+          // Extract contact_id and agent_id from dynamicVariables for Base44 integration
+          contact_id: dynamicVariables?.contact_id || null,
+          agent_id: dynamicVariables?.agent_id || null
         });
 
         // Build response
@@ -2046,8 +2050,404 @@ app.post('/process-speech', async (req, res) => {
   }
 });
 
+// ====================================================
+// ElevenLabs Agent Tool Proxy Endpoints
+// ====================================================
+
 /**
- * Call status callback from Twilio
+ * POST /elevenlabs-tools/check-availability
+ * Proxy endpoint for ElevenLabs agent checkAvailability tool
+ * Forwards requests to Base44 and tracks tool calls
+ */
+app.post('/elevenlabs-tools/check-availability', async (req, res) => {
+  try {
+    const { contact_id, agent_id, preferred_date, address } = req.body;
+    
+    logger.info('ElevenLabs checkAvailability tool called', {
+      contact_id,
+      agent_id,
+      preferred_date,
+      address
+    });
+
+    // Forward to Base44 API
+    const base44Url = 'https://simpleappointmentsinc.com/api/functions/checkCloserAvailability';
+    
+    try {
+      // Set up timeout using AbortController
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
+      const base44Response = await fetch(base44Url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          contact_id,
+          agent_id,
+          preferred_date,
+          address
+        }),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      const base44Data = await base44Response.json();
+      
+      logger.info('Base44 checkAvailability response', {
+        success: base44Data.success,
+        slotsCount: base44Data.available_slots?.length || 0
+      });
+
+      // Return response to ElevenLabs
+      res.json(base44Data);
+    } catch (base44Error) {
+      logger.error('Error calling Base44 checkAvailability', {
+        error: base44Error.message
+      });
+      
+      // Return error response to ElevenLabs
+      res.json({
+        success: false,
+        error: 'Failed to check availability',
+        available_slots: []
+      });
+    }
+  } catch (error) {
+    logger.error('Error in checkAvailability proxy', { error: error.message });
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+/**
+ * POST /elevenlabs-tools/book-appointment
+ * Proxy endpoint for ElevenLabs agent bookAppointment tool
+ * Forwards requests to Base44 and tracks successful bookings
+ */
+app.post('/elevenlabs-tools/book-appointment', async (req, res) => {
+  try {
+    const {
+      contact_id,
+      agent_id,
+      appointment_date,
+      start_time,
+      end_time,
+      customer_name,
+      customer_phone,
+      customer_address,
+      meeting_purpose
+    } = req.body;
+    
+    logger.info('ElevenLabs bookAppointment tool called', {
+      contact_id,
+      agent_id,
+      appointment_date,
+      start_time,
+      customer_phone
+    });
+
+    // Forward to Base44 API
+    const base44Url = 'https://simpleappointmentsinc.com/api/functions/handleVoiceBooking';
+    
+    try {
+      // Set up timeout using AbortController
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
+      const base44Response = await fetch(base44Url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          contact_id,
+          agent_id,
+          appointment_date,
+          start_time,
+          end_time,
+          customer_name,
+          customer_phone,
+          customer_address,
+          meeting_purpose
+        }),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      const base44Data = await base44Response.json();
+      
+      logger.info('Base44 bookAppointment response', {
+        success: base44Data.success,
+        appointment_id: base44Data.appointment_id
+      });
+
+      // Track tool call for later analysis (find callSid by phone number)
+      // Note: In production, you might need to pass callSid via dynamic variables
+      // For now, we'll rely on the Twilio status callback to correlate data
+      
+      // Return response to ElevenLabs
+      res.json(base44Data);
+    } catch (base44Error) {
+      logger.error('Error calling Base44 bookAppointment', {
+        error: base44Error.message
+      });
+      
+      // Return error response to ElevenLabs
+      res.json({
+        success: false,
+        error: 'Failed to book appointment',
+        appointment_id: null
+      });
+    }
+  } catch (error) {
+    logger.error('Error in bookAppointment proxy', { error: error.message });
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
+// ====================================================
+// Twilio Status Callback for Base44 Integration
+// ====================================================
+
+/**
+ * POST /twilio-status-callback
+ * New endpoint specifically for Base44 integration
+ * Receives Twilio call completion data, analyzes ElevenLabs conversation,
+ * and forwards combined data to Base44
+ */
+app.post('/twilio-status-callback', async (req, res) => {
+  try {
+    const {
+      CallSid,
+      CallDuration,
+      CallStatus
+    } = req.body;
+
+    logger.info('Twilio status callback for Base44 received', {
+      callSid: CallSid,
+      status: CallStatus,
+      duration: CallDuration
+    });
+
+    // Get conversation data from call tracker
+    const conversationData = callTracker.getFullCallData(CallSid);
+    
+    if (!conversationData) {
+      logger.warn('No conversation data found for callSid', { callSid: CallSid });
+      return res.sendStatus(200);
+    }
+
+    // Analyze ElevenLabs conversation to determine outcome
+    let outcome = null;
+    let followUpDate = null;
+
+    // Check if appointment was booked via tool call
+    if (conversationData.toolCalls && conversationData.toolCalls.length > 0) {
+      const bookingTool = conversationData.toolCalls.find(t => t.name === 'bookAppointment');
+      if (bookingTool && bookingTool.success) {
+        outcome = 'appointment_booked';
+        logger.info('Detected appointment booking', { callSid: CallSid });
+      }
+    }
+
+    // If no appointment booked, analyze transcript for other outcomes
+    if (!outcome && conversationData.transcript && Array.isArray(conversationData.transcript) && conversationData.transcript.length > 0) {
+      // Combine transcript entries into a single string with null safety
+      const transcriptText = conversationData.transcript
+        .filter(t => t && typeof t === 'object')
+        .map(t => (t.content || '').toString())
+        .join(' ')
+        .toLowerCase();
+      
+      logger.info('Analyzing transcript for outcome', {
+        callSid: CallSid,
+        transcriptLength: transcriptText.length
+      });
+
+      // Check for explicit rejection/disinterest
+      if (transcriptText.includes('not interested') || 
+          transcriptText.includes('no thanks') ||
+          transcriptText.includes('don\'t want') ||
+          transcriptText.includes('not right now')) {
+        outcome = 'not_interested';
+      }
+      // Check for declined/rejection
+      else if (transcriptText.includes('decline') || 
+               transcriptText.includes('no thank you')) {
+        outcome = 'declined';
+      }
+      // Check for follow-up request
+      else if (transcriptText.includes('call back') || 
+               transcriptText.includes('follow up') ||
+               transcriptText.includes('call me back') ||
+               transcriptText.includes('try again later')) {
+        outcome = 'follow_up_scheduled';
+        
+        // Try to extract follow-up date from transcript
+        followUpDate = extractFollowUpDate(transcriptText);
+        logger.info('Detected follow-up request', {
+          callSid: CallSid,
+          followUpDate
+        });
+      }
+    }
+
+    // Default outcome if none detected (goes to Recycle folder in Base44)
+    if (!outcome) {
+      logger.info('No specific outcome detected, using default', { callSid: CallSid });
+    }
+
+    // Map Twilio status to Base44 format
+    const statusMap = {
+      'completed': 'completed',
+      'busy': 'busy',
+      'no-answer': 'no-answer',
+      'failed': 'failed',
+      'canceled': 'failed'
+    };
+
+    const base44Status = statusMap[CallStatus] || 'completed';
+
+    // Prepare payload for Base44
+    const base44Payload = {
+      callSid: CallSid,
+      duration: parseInt(CallDuration) || 0,
+      status: base44Status,
+      outcome: outcome,
+      followUpDate: followUpDate
+    };
+
+    logger.info('Sending call data to Base44', {
+      callSid: CallSid,
+      payload: base44Payload
+    });
+
+    // Send to Base44 trackAICallDuration endpoint
+    try {
+      // Set up timeout using AbortController
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
+
+      const base44Response = await fetch('https://simpleappointmentsinc.com/api/functions/trackAICallDuration', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(base44Payload),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (base44Response.ok) {
+        logger.info('Successfully sent call data to Base44', {
+          callSid: CallSid,
+          statusCode: base44Response.status
+        });
+      } else {
+        logger.error('Base44 returned error status', {
+          callSid: CallSid,
+          statusCode: base44Response.status
+        });
+      }
+    } catch (base44Error) {
+      logger.error('Error sending data to Base44', {
+        callSid: CallSid,
+        error: base44Error.message
+      });
+    }
+
+    // Update call tracker
+    callTracker.updateStatus(CallSid, CallStatus);
+    callTracker.endCall(CallSid, CallStatus);
+    
+    // Cleanup after delay
+    setTimeout(() => {
+      callTracker.removeCall(CallSid);
+    }, 60000); // Keep for 1 minute after completion
+
+    res.sendStatus(200);
+  } catch (error) {
+    logger.error('Error in Twilio status callback for Base44', { error: error.message });
+    res.sendStatus(500);
+  }
+});
+
+/**
+ * Helper function to extract follow-up date from transcript
+ * @param {string} transcript - Lowercased transcript text
+ * @returns {string|null} - ISO date string or null
+ */
+function extractFollowUpDate(transcript) {
+  try {
+    const now = new Date();
+    
+    // Check for "tomorrow"
+    if (transcript.includes('tomorrow')) {
+      const tomorrow = new Date(now);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      tomorrow.setHours(14, 0, 0, 0); // Default to 2 PM
+      return tomorrow.toISOString();
+    }
+    
+    // Check for "next week"
+    if (transcript.includes('next week')) {
+      const nextWeek = new Date(now);
+      nextWeek.setDate(nextWeek.getDate() + 7);
+      nextWeek.setHours(14, 0, 0, 0); // Default to 2 PM
+      return nextWeek.toISOString();
+    }
+    
+    // Check for specific days (Monday, Tuesday, etc.)
+    // Array ordered: ['monday'=0, 'tuesday'=1, ..., 'sunday'=6]
+    // JavaScript getDay(): Sunday=0, Monday=1, Tuesday=2, ..., Saturday=6
+    const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+    const currentDay = now.getDay(); // 0 = Sunday, 1 = Monday, etc.
+    
+    for (let i = 0; i < days.length; i++) {
+      if (transcript.includes(days[i])) {
+        // Map array index to JavaScript day number
+        // monday (i=0) -> 1, tuesday (i=1) -> 2, ..., saturday (i=5) -> 6, sunday (i=6) -> 0
+        let targetDay;
+        if (i === 6) { // sunday
+          targetDay = 0;
+        } else { // monday through saturday
+          targetDay = i + 1;
+        }
+        
+        let daysToAdd = targetDay - currentDay;
+        if (daysToAdd <= 0) {
+          daysToAdd += 7; // Next occurrence of that day
+        }
+        const targetDate = new Date(now);
+        targetDate.setDate(targetDate.getDate() + daysToAdd);
+        targetDate.setHours(14, 0, 0, 0); // Default to 2 PM
+        return targetDate.toISOString();
+      }
+    }
+    
+    // If no specific date pattern found, default to 1 week from now
+    const defaultDate = new Date(now);
+    defaultDate.setDate(defaultDate.getDate() + 7);
+    defaultDate.setHours(14, 0, 0, 0);
+    return defaultDate.toISOString();
+  } catch (error) {
+    logger.error('Error extracting follow-up date', { error: error.message });
+    return null;
+  }
+}
+
+/**
+ * Call status callback from Twilio (legacy endpoint)
  */
 app.post('/call-status-callback', async (req, res) => {
   try {

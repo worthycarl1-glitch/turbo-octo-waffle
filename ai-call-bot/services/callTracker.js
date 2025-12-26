@@ -52,7 +52,16 @@ class CallTracker {
       transferConditions: config.transferConditions || [],
       recording: null,
       lastUpdated: now,
-      language: config.language || 'en-US'
+      language: config.language || 'en-US',
+      // ElevenLabs Agent Mode tracking
+      agentId: config.agentId || null,
+      agentMode: config.agentMode || false,
+      elevenLabsConversationId: config.elevenLabsConversationId || null,
+      // Tool calls tracking for appointment booking
+      toolCalls: [],
+      // Contact and Agent tracking for Base44 integration
+      contact_id: config.contact_id || null,
+      agent_id: config.agent_id || null
     });
     
     return this.activeCalls.get(callSid);
@@ -205,6 +214,52 @@ class CallTracker {
       call.lastUpdated = new Date();
     }
     return call;
+  }
+
+  /**
+   * Add tool call result to tracking
+   * @param {string} callSid 
+   * @param {object} toolCallData - Tool call information
+   */
+  addToolCall(callSid, toolCallData) {
+    const call = this.activeCalls.get(callSid);
+    if (call) {
+      call.toolCalls.push({
+        name: toolCallData.name,
+        parameters: toolCallData.parameters || {},
+        success: toolCallData.success || false,
+        result: toolCallData.result || null,
+        timestamp: new Date().toISOString()
+      });
+      call.lastUpdated = new Date();
+    }
+    return call;
+  }
+
+  /**
+   * Get full call data including tool calls
+   * @param {string} callSid 
+   */
+  getFullCallData(callSid) {
+    const call = this.activeCalls.get(callSid);
+    if (!call) {
+      return null;
+    }
+
+    return {
+      callSid: call.callSid,
+      conversationId: call.conversationId,
+      elevenLabsConversationId: call.elevenLabsConversationId,
+      status: call.status,
+      duration: call.duration,
+      transcript: call.transcript,
+      toolCalls: call.toolCalls,
+      contact_id: call.contact_id,
+      agent_id: call.agent_id,
+      agentId: call.agentId,
+      sentiment: call.sentiment,
+      metadata: call.metadata
+    };
   }
 
   /**

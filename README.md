@@ -26,6 +26,7 @@ Latency: ~2.5s | Cost: ~$0.22/min
 - ✅ **Full Agent Management API** - Create, update, delete agents from UI
 - ✅ **Knowledge Base Management** - Upload and manage agent knowledge files
 - ✅ **Template Cloning** - Clone agents for per-client customization
+- ✅ **Base44 CRM Integration** - Complete appointment scheduling and call tracking
 - ✅ Real-time call status monitoring
 - ✅ Webhook callbacks on call completion
 - ✅ Call recording support
@@ -263,8 +264,64 @@ turbo-octo-waffle/
 ├── public/
 │   └── dashboard/                       # Optional dashboard UI
 ├── API_DOCUMENTATION.md                 # Full API documentation for agent management
+├── BASE44_INTEGRATION.md                # Complete Base44 CRM integration guide
 ├── DATABASE_SCHEMA.md                   # Database schema for local agent storage
 └── README.md
+```
+
+---
+
+## 🔗 Base44 CRM Integration
+
+Complete integration with Base44 CRM for appointment scheduling and call tracking. Railway acts as middleware connecting Twilio, ElevenLabs, and Base44.
+
+### Quick Start
+
+```javascript
+// Make a call from Base44 with contact and agent tracking
+POST /make-call
+{
+  "to": "+14155551234",
+  "agentId": "agent_abc123",
+  "dynamicVariables": {
+    "contact_id": "base44_contact_123",
+    "agent_id": "base44_agent_456",
+    "customer_name": "John Smith"
+  }
+}
+```
+
+### Key Features
+
+- **Appointment Scheduling Tools**: Check availability and book appointments through voice conversation
+- **Automatic Outcome Detection**: Analyzes conversation to determine call outcome (booked, declined, follow-up, etc.)
+- **Follow-Up Date Extraction**: Parses natural language for follow-up dates ("tomorrow", "next week", etc.)
+- **Complete Call Tracking**: Sends combined data (callSid, duration, status, outcome) to Base44
+
+### Available Endpoints
+
+| Endpoint | Purpose |
+|----------|---------|
+| `/elevenlabs-tools/check-availability` | Proxy to Base44 availability checker |
+| `/elevenlabs-tools/book-appointment` | Proxy to Base44 booking handler |
+| `/twilio-status-callback` | Receives Twilio completion events and forwards to Base44 |
+
+### Documentation
+
+See [BASE44_INTEGRATION.md](./BASE44_INTEGRATION.md) for complete setup instructions, including:
+- ElevenLabs agent tool configuration
+- Status callback setup
+- Outcome detection logic
+- Testing guide
+- Troubleshooting
+
+**Architecture:**
+```
+Base44 Dashboard → Railway /make-call → ElevenLabs Agent → Twilio Call
+                                            ↓
+                        During Call: Agent Tools → Railway Proxy → Base44
+                                            ↓
+                        Call Ends: Twilio → Railway → Base44 (combined data)
 ```
 
 ---
