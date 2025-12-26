@@ -2260,10 +2260,11 @@ app.post('/twilio-status-callback', async (req, res) => {
     }
 
     // If no appointment booked, analyze transcript for other outcomes
-    if (!outcome && conversationData.transcript && conversationData.transcript.length > 0) {
-      // Combine transcript entries into a single string
+    if (!outcome && conversationData.transcript && Array.isArray(conversationData.transcript) && conversationData.transcript.length > 0) {
+      // Combine transcript entries into a single string with null safety
       const transcriptText = conversationData.transcript
-        .map(t => t.content || '')
+        .filter(t => t && typeof t === 'object')
+        .map(t => (t.content || '').toString())
         .join(' ')
         .toLowerCase();
       
@@ -2407,14 +2408,22 @@ function extractFollowUpDate(transcript) {
     }
     
     // Check for specific days (Monday, Tuesday, etc.)
+    // Array ordered: ['monday'=0, 'tuesday'=1, ..., 'sunday'=6]
+    // JavaScript getDay(): Sunday=0, Monday=1, Tuesday=2, ..., Saturday=6
     const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
     const currentDay = now.getDay(); // 0 = Sunday, 1 = Monday, etc.
     
     for (let i = 0; i < days.length; i++) {
       if (transcript.includes(days[i])) {
-        // Map array index to day of week (0-6, where 0 is Sunday)
-        // Array is ordered Monday-Sunday, so map index to day number
-        const targetDay = (i + 1) % 7; // Monday=1, Tuesday=2, ..., Sunday=0
+        // Map array index to JavaScript day number
+        // monday (i=0) -> 1, tuesday (i=1) -> 2, ..., saturday (i=5) -> 6, sunday (i=6) -> 0
+        let targetDay;
+        if (i === 6) { // sunday
+          targetDay = 0;
+        } else { // monday through saturday
+          targetDay = i + 1;
+        }
+        
         let daysToAdd = targetDay - currentDay;
         if (daysToAdd <= 0) {
           daysToAdd += 7; // Next occurrence of that day
