@@ -2074,6 +2074,10 @@ app.post('/elevenlabs-tools/check-availability', async (req, res) => {
     const base44Url = 'https://simpleappointmentsinc.com/api/functions/checkCloserAvailability';
     
     try {
+      // Set up timeout using AbortController
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
       const base44Response = await fetch(base44Url, {
         method: 'POST',
         headers: {
@@ -2085,8 +2089,10 @@ app.post('/elevenlabs-tools/check-availability', async (req, res) => {
           preferred_date,
           address
         }),
-        timeout: 10000 // 10 second timeout
+        signal: controller.signal
       });
+
+      clearTimeout(timeoutId);
 
       const base44Data = await base44Response.json();
       
@@ -2149,6 +2155,10 @@ app.post('/elevenlabs-tools/book-appointment', async (req, res) => {
     const base44Url = 'https://simpleappointmentsinc.com/api/functions/handleVoiceBooking';
     
     try {
+      // Set up timeout using AbortController
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
       const base44Response = await fetch(base44Url, {
         method: 'POST',
         headers: {
@@ -2165,8 +2175,10 @@ app.post('/elevenlabs-tools/book-appointment', async (req, res) => {
           customer_address,
           meeting_purpose
         }),
-        timeout: 10000 // 10 second timeout
+        signal: controller.signal
       });
+
+      clearTimeout(timeoutId);
 
       const base44Data = await base44Response.json();
       
@@ -2320,14 +2332,20 @@ app.post('/twilio-status-callback', async (req, res) => {
 
     // Send to Base44 trackAICallDuration endpoint
     try {
+      // Set up timeout using AbortController
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
+
       const base44Response = await fetch('https://simpleappointmentsinc.com/api/functions/trackAICallDuration', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify(base44Payload),
-        timeout: 15000 // 15 second timeout
+        signal: controller.signal
       });
+
+      clearTimeout(timeoutId);
 
       if (base44Response.ok) {
         logger.info('Successfully sent call data to Base44', {
@@ -2394,7 +2412,9 @@ function extractFollowUpDate(transcript) {
     
     for (let i = 0; i < days.length; i++) {
       if (transcript.includes(days[i])) {
-        const targetDay = i === 0 ? 0 : i; // Adjust for Sunday being 0
+        // Map array index to day of week (0-6, where 0 is Sunday)
+        // Array is ordered Monday-Sunday, so map index to day number
+        const targetDay = (i + 1) % 7; // Monday=1, Tuesday=2, ..., Sunday=0
         let daysToAdd = targetDay - currentDay;
         if (daysToAdd <= 0) {
           daysToAdd += 7; // Next occurrence of that day
